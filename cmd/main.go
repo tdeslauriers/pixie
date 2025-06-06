@@ -36,6 +36,7 @@ func main() {
 			Identity:         true,
 			S2sVerifyingKey:  true,
 			UserVerifyingKey: true,
+			ObjectStorage:    true,
 		},
 	}
 

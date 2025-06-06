@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+
 	"log/slog"
 	"net/http"
 	"time"
@@ -15,7 +16,9 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/carapace/pkg/session/provider"
 	"github.com/tdeslauriers/carapace/pkg/sign"
+	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/image"
 )
 
 // Gallery is the interface for engine that runs this service
@@ -50,10 +53,34 @@ func New(config *config.Config) (Gallery, error) {
 		CaFiles:  []string{*config.Certs.ClientCa},
 	}
 
-	clientConfig := connect.NewTlsClientConfig(clientPki)
-	client, err := connect.NewTlsClient(clientConfig)
+	// tls config for s2s client
+	s2sClientConfig := connect.NewTlsClientConfig(clientPki)
+
+	// s2s s2sClient
+	s2sClient, err := connect.NewTlsClient(s2sClientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure s2s client config: %v", err)
+	}
+
+	// minio client
+	objStorageConfig := storage.Config{
+		Url:       config.ObjectStorage.Url,
+		Bucket:    config.ObjectStorage.Bucket,
+		AccessKey: config.ObjectStorage.AccessKey,
+		SecretKey: config.ObjectStorage.SecretKey,
+	}
+
+	// tls config for minio client
+	minioTlsConfig, err := connect.NewTlsClientConfig(clientPki).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure minio client tls: %v", err)
+	}
+
+	// object storage service
+	// set default link expiration to 10 minutes
+	objStore, err := storage.New(objStorageConfig, minioTlsConfig, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create object storage service: %v", err)
 	}
 
 	// db client
@@ -84,12 +111,12 @@ func New(config *config.Config) (Gallery, error) {
 	repository := data.NewSqlRepository(db)
 
 	// indexer
-	// hmacSecret, err := base64.StdEncoding.DecodeString(config.Database.IndexSecret)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to decode hmac secret: %v", err)
-	// }
+	hmacSecret, err := base64.StdEncoding.DecodeString(config.Database.IndexSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode hmac secret: %v", err)
+	}
 
-	// indexer := data.NewIndexer(hmacSecret)
+	indexer := data.NewIndexer(hmacSecret)
 
 	// field level encryption
 	aes, err := base64.StdEncoding.DecodeString(config.Database.FieldSecret)
@@ -119,8 +146,7 @@ func New(config *config.Config) (Gallery, error) {
 		MaxBackoff:  10 * time.Second,
 	}
 
-	s2s := connect.NewS2sCaller(config.ServiceAuth.Url, util.ServiceS2s, client, retry)
-	identity := connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, client, retry)
+	s2s := connect.NewS2sCaller(config.ServiceAuth.Url, util.ServiceS2s, s2sClient, retry)
 
 	// s2s token provider
 	s2sCreds := provider.S2sCredentials{
@@ -128,16 +154,15 @@ func New(config *config.Config) (Gallery, error) {
 		ClientSecret: config.ServiceAuth.ClientSecret,
 	}
 
-	s2sTokenProvider := provider.NewS2sTokenProvider(s2s, s2sCreds, repository, cryptor)
-
 	return &gallery{
 		config:           *config,
 		serverTls:        serverTlsConfig,
 		repository:       repository,
-		s2sTokenProvider: s2sTokenProvider,
+		s2sTokenProvider: provider.NewS2sTokenProvider(s2s, s2sCreds, repository, cryptor),
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
-		identity:         identity,
+		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
+		imageService:     image.NewService(repository, indexer, cryptor, objStore),
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -157,6 +182,7 @@ type gallery struct {
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
 	identity         connect.S2sCaller
+	imageService     image.Service
 
 	logger *slog.Logger
 }
@@ -172,8 +198,14 @@ func (g *gallery) CloseDb() error {
 // Run runs the gallery service.
 func (g *gallery) Run() error {
 
+	// image handler
+	img := image.NewHandler(g.imageService, g.s2sVerifier, g.iamVerifier)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
+
+	// image handler
+	mux.HandleFunc("/image/", img.HandleImage) // trailing slash is so slugs can be appended to the path
 
 	galleryServer := &connect.TlsServer{
 		Addr:      g.config.ServicePort,

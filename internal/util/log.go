@@ -6,12 +6,14 @@ const (
 
 	PackageMain        = "main"
 	PackageGallery     = "gallery"
+	PackageImage       = "image"
 	PackagePermissions = "permissions"
 
 	// component keys
 	ComponentKey = "component"
 
-	ComponentMain = "main"
+	ComponentMain    = "main"
+	ComponentImage   = "image"
 	ComponentGallery = "gallery"
 
 	// service keys
