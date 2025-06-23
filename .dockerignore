@@ -1,0 +1,19 @@
+# IDE files
+.git
+.gitignore
+.vscode
+.idea
+
+# Compiled output and temp directories
+/bin
+/tmp
+/build
+/dist
+/coverage
+
+# Local aritfacts
+certs/
+sql/
+sh/
+k8s/
+.env

@@ -29,11 +29,9 @@ func main() {
 		ServiceName: util.ServiceGallery,
 		Tls:         config.MutualTls,
 		Requires: config.Requires{
-			S2sClient:        true,
 			Db:               true,
 			IndexSecret:      true,
 			AesSecret:        true,
-			Identity:         true,
 			S2sVerifyingKey:  true,
 			UserVerifyingKey: true,
 			ObjectStorage:    true,

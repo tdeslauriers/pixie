@@ -205,7 +205,7 @@ func (g *gallery) Run() error {
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
 	// image handler
-	mux.HandleFunc("/image/", img.HandleImage) // trailing slash is so slugs can be appended to the path
+	mux.HandleFunc("/images/", img.HandleImage) // trailing slash is so slugs can be appended to the path
 
 	galleryServer := &connect.TlsServer{
 		Addr:      g.config.ServicePort,
