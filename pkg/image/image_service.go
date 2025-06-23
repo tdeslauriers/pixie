@@ -3,6 +3,7 @@ package image
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -19,9 +20,10 @@ type Service interface {
 	GetImageData(slug string) (*ImageData, error)
 
 	// BuildPlaceholder builds the metadata for a placeholder image record.
-	// eg, the id, slug, title, and description provided by the user.   The image processing
-	// pipeline will build the rest of the record upon ingestion of the image file.
-	BuildPlaceholder(r *ImageRecord) error
+	// eg, the id, slug, title, and description provided by the user.
+	// Once meta data persisted, a presigned put url is generated and returned.
+	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
+	BuildPlaceholder(r *ImageRecord) (*url.URL, error)
 }
 
 // NewService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -74,14 +76,15 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 
 // BuildPlaceholder is the concrete implementation of the interface method which
 // builds the metadata for a placeholder image record.
-// eg, the id, slug, title, and description provided by the user.   The image processing
-// pipeline will build the rest of the record upon ingestion of the image file.
-func (s *imageService) BuildPlaceholder(r *ImageRecord) error {
+// eg, the id, slug, title, and description provided by the user.
+// Once meta data persisted, a presigned put url is generated and returned.
+// The image processing pipeline will build the rest of the record upon ingestion of the image file.
+func (s *imageService) BuildPlaceholder(r *ImageRecord) (*url.URL, error) {
 
 	// validate the created metadata
 	// should be a redundant check, but good practice
 	if err := r.Validate(); err != nil {
-		return fmt.Errorf("failed to validate image record: %v", err)
+		return nil, fmt.Errorf("failed to validate image record: %v", err)
 	}
 
 	// encrypt the sensitive fields in the image record
@@ -90,15 +93,19 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) error {
 
 		titleCh = make(chan string, 1)
 		descCh  = make(chan string, 1)
+		fnCh    = make(chan string, 1) // file name is encrypted because it is made of the slug
+		okCh    = make(chan string, 1) // object key is encrypted because it is made of the slug
 		slugCh  = make(chan string, 1)
 		idxCh   = make(chan string, 1) // to capture the slug index for fast lookups, generated from the slug
 
-		errCh = make(chan error, 4) // to capture any errors from encryption + slug index creation
+		errCh = make(chan error, 6) // to capture any errors from encryption + slug index creation
 	)
 
-	wg.Add(3)
+	wg.Add(5)
 	go s.encrypt(r.Title, titleCh, errCh, &wg)
 	go s.encrypt(r.Description, descCh, errCh, &wg)
+	go s.encrypt(r.FileName, fnCh, errCh, &wg)
+	go s.encrypt(r.ObjectKey, okCh, errCh, &wg)
 	go s.encrypt(r.Slug, slugCh, errCh, &wg)
 
 	wg.Add(1)
@@ -119,6 +126,8 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) error {
 	wg.Wait()
 	close(titleCh)
 	close(descCh)
+	close(fnCh)
+	close(okCh)
 	close(slugCh)
 	close(idxCh)
 	close(errCh)
@@ -129,7 +138,7 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) error {
 		for err := range errCh {
 			errs = append(errs, err.Error())
 		}
-		return fmt.Errorf("failed to encrypt image fields and/or generate slug index: %s", strings.Join(errs, "; "))
+		return nil, fmt.Errorf("failed to encrypt image fields and/or generate slug index: %s", strings.Join(errs, "; "))
 	}
 
 	// need to make a copy of the image record to avoid modifying the original
@@ -137,9 +146,9 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) error {
 		Id:          r.Id,
 		Title:       <-titleCh,
 		Description: <-descCh,
-		FileName:    r.FileName,
+		FileName:    <-fnCh,
 		FileType:    r.FileType,
-		ObjectKey:   r.ObjectKey,
+		ObjectKey:   <-okCh,
 		Slug:        <-slugCh,
 		SlugIndex:   <-idxCh,
 		Width:       r.Width,
@@ -173,10 +182,15 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) error {
 		is_published
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if err := s.sql.InsertRecord(qry, imageRecord); err != nil {
-		return fmt.Errorf("failed to insert image record into database: %v", err)
+		return nil, fmt.Errorf("failed to insert image record into database: %v", err)
 	}
 
-	return nil
+	// generate a presigned put URL for the image file in object storage
+	putUrl, err := s.store.GetPreSignedPutUrl(imageRecord.ObjectKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get presigned put URL for image object key '%s': %v", imageRecord.ObjectKey, err)
+	}
+	return putUrl, nil
 }
 
 // encrypt is a helper function that encrypts the sensitive fields for the image service.

@@ -237,8 +237,10 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		IsPublished: false, // default to not published --> image prcessing pipeline will publish the image when processing is complete
 	}
 
-	// store the image record in the database
-	if err := h.svc.BuildPlaceholder(&imageRecord); err != nil {
+	// persist the image record in the database and
+	// generate a pre-signed PUT URL to return for browser to submit the file to object storage
+	putUrl, err := h.svc.BuildPlaceholder(&imageRecord)
+	if err != nil {
 		h.logger.Error(fmt.Sprintf("/images handler failed to build placeholder image record: %v", err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
@@ -248,9 +250,35 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// generate the put url
-
 	// TODO: add the pre-added album mappings from the upload command. --> may also included adding album record.
 	// TODO: add the pre-added permissions tags from the upload command.
 
+	// build reponse data to return to the client
+	responseData := ImageData{
+		Id:          imageRecord.Id,
+		Title:       imageRecord.Title,
+		Description: imageRecord.Description,
+		FileName:    imageRecord.FileName,
+		FileType:    imageRecord.FileType,
+		ObjectKey:   imageRecord.ObjectKey, // this is the "uploads/slug.jpg" key in object storage -> staging
+		Slug:        imageRecord.Slug,
+		Size:        imageRecord.Size,
+		CreatedAt:   imageRecord.CreatedAt,
+		IsArchived:  imageRecord.IsArchived,
+		IsPublished: imageRecord.IsPublished,
+		SignedUrl:   putUrl.String(), // the pre-signed PUT URL for the browser to upload the image file into object storage
+	}
+
+	h.logger.Info(fmt.Sprintf("/images/ handler successfully created placeholder image record with id %s", imageRecord.Id))
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(responseData); err != nil {
+		h.logger.Error(fmt.Sprintf("/images/ handler failed to encode placeholder image data: %v", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to json encode placeholder image data",
+		}
+		e.SendJsonErr(w)
+		return
+	}
 }

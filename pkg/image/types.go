@@ -46,8 +46,10 @@ type ImageData struct {
 	Id          string `db:"uuid" json:"id,omitempty"`               // Unique identifier for the image record
 	Title       string `db:"title" json:"title"`                     // Title of the image
 	Description string `db:"description" json:"description"`         // Description of the image
-	Slug        string `db:"slug" json:"slug,omitempty"`             // A unique slug for the image, used in URLs
+	FileName    string `db:"file_name" json:"file_name,omitempty"`   // name of the file with it's extension, eg, "slug.jpg"   // MIME type of the image, eg, "image/jpeg", "image/png"
 	FileType    string `db:"file_type" json:"file_type,omitempty"`   // MIME type of the image, eg, "image/jpeg", "image/png"
+	ObjectKey   string `db:"object_key" json:"object_key,omitempty"` // The key used to store the image in object storage, eg, "2025/slug.jpg"
+	Slug        string `db:"slug" json:"slug,omitempty"`             // ENCRYPTED: a unique slug for the image, used in URLs
 	Width       int    `db:"width" json:"width,omitempty"`           // Width of the image in pixels
 	Height      int    `db:"height" json:"height,omitempty"`         // Height of the image in pixels
 	Size        int64  `db:"size" json:"size,omitempty"`             // Size of the image file in bytes
@@ -57,7 +59,11 @@ type ImageData struct {
 	IsArchived  bool   `db:"is_archived" json:"is_archived"`         // Indicates if the image is archived
 	IsPublished bool   `db:"is_published" json:"is_published"`       // Indicates if the image is published and visible to users
 
-	SignedUrl string `json:"signed_url"` // The signed URL for the image, used to access the image in object storage
+	// can be either the pre-signed PUT URL for uploading the image file
+	// or the pre-signed GET URL for downloading the image file.
+	// This field is dynamically generated and not stored in the database.
+	// NOTE: may need to break this model out into two separate models later
+	SignedUrl string `json:"signed_url,omitempty"` // The signed URL for the image, used to access the image in object storage
 }
 
 // ImageRecord is a model that represents the image record in the database.
