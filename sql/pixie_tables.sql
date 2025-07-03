@@ -35,6 +35,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS album_slug_index_idx ON album (slug_index);
 -- permission table
 CREATE TABLE permission (
     uuid CHAR(36) PRIMARY KEY,
+    service VARCHAR(32) NOT NULL,
     name VARCHAR(128) NOT NULL,
     description VARCHAR(512) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT UTC_TIMESTAMP,

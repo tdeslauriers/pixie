@@ -12,9 +12,10 @@ const (
 	// component keys
 	ComponentKey = "component"
 
-	ComponentMain    = "main"
-	ComponentImage   = "image"
-	ComponentGallery = "gallery"
+	ComponentMain        = "main"
+	ComponentImage       = "image"
+	ComponentGallery     = "gallery"
+	ComponentPermissions = "permissions"
 
 	// service keys
 	ServiceKey = "service"

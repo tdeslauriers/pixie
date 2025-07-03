@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/util"
 )
@@ -60,7 +61,7 @@ func (h *imageHandler) HandleImage(w http.ResponseWriter, r *http.Request) {
 		// Handle GET request for image processing
 		h.getImageData(w, r)
 		return
-	case http.MethodPost:
+	case http.MethodPost: // /images/upload --> 'upload' will be the slug for POSTs
 		// Handle POST request for image processing
 		h.handleAddImageRecord(w, r)
 		return
@@ -115,6 +116,8 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 		e.SendJsonErr(w)
 		return
 	}
+
+	// TODO: once permissions are added, make it so only admins can see unpublished/archived images
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(imageData); err != nil {
@@ -232,9 +235,10 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		Size:        cmd.Size,
 		Width:       0, // default to 0 until image is processed
 		Height:      0, // default to 0 until image is processed
-		CreatedAt:   now.Format(time.RFC3339),
-		IsArchived:  false, // default to not archived
-		IsPublished: false, // default to not published --> image prcessing pipeline will publish the image when processing is complete
+		CreatedAt:   data.CustomTime{Time: now},
+		UpdatedAt:   data.CustomTime{Time: now}, // updated at is the same as created at for a new record
+		IsArchived:  false,                      // default to not archived
+		IsPublished: false,                      // default to not published --> image prcessing pipeline will publish the image when processing is complete
 	}
 
 	// persist the image record in the database and
@@ -263,7 +267,8 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		ObjectKey:   imageRecord.ObjectKey, // this is the "uploads/slug.jpg" key in object storage -> staging
 		Slug:        imageRecord.Slug,
 		Size:        imageRecord.Size,
-		CreatedAt:   imageRecord.CreatedAt,
+		CreatedAt:   imageRecord.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   imageRecord.UpdatedAt.Format(time.RFC3339), // format the time as RFC3339
 		IsArchived:  imageRecord.IsArchived,
 		IsPublished: imageRecord.IsPublished,
 		SignedUrl:   putUrl.String(), // the pre-signed PUT URL for the browser to upload the image file into object storage

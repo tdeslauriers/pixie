@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 )
 
@@ -71,22 +72,22 @@ type ImageData struct {
 // metadata, and any other relevant information.
 // It does not include the signed URL, as that is generated dynamically when requested.
 type ImageRecord struct {
-	Id          string `db:"uuid" json:"id"`                   // Unique identifier for the image record
-	Title       string `db:"title" json:"title"`               // ENCRYPTED: title of the image
-	Description string `db:"description" json:"description"`   // ENCRYPTED: description of the image
-	FileName    string `db:"file_name" json:"file_name"`       // name of the file with it's extension, eg, "slug.jpg"
-	FileType    string `db:"file_type" json:"file_type"`       // MIME type of the image, eg, "jpeg"
-	ObjectKey   string `db:"object_key" json:"object_key"`     // The key used to store the image in object storage, eg, "2025/slug.jpg"
-	Slug        string `db:"slug" json:"slug"`                 // ENCRYPTED: a unique slug for the image, used in URLs
-	SlugIndex   string `db:"slug_index" json:"slug_index"`     // blind index for slug, indexed for fast lookups
-	Width       int    `db:"width" json:"width"`               // Width of the image in pixels
-	Height      int    `db:"height" json:"height"`             // Height of the image in pixels
-	Size        int64  `db:"size" json:"size"`                 // Size of the image file in bytes
-	ImageDate   string `db:"image_date" json:"image_date"`     // ENCRYPTED: date when the image was taken or created, ie, from exif metadata
-	CreatedAt   string `db:"created_at" json:"created_at"`     // Timestamp when the image was created
-	UpdatedAt   string `db:"updated_at" json:"updated_at"`     // Timestamp when the image was last updated
-	IsArchived  bool   `db:"is_archived" json:"is_archived"`   // Indicates if the image is archived
-	IsPublished bool   `db:"is_published" json:"is_published"` // Indicates if the image is published and visible to users
+	Id          string          `db:"uuid" json:"id"`                   // Unique identifier for the image record
+	Title       string          `db:"title" json:"title"`               // ENCRYPTED: title of the image
+	Description string          `db:"description" json:"description"`   // ENCRYPTED: description of the image
+	FileName    string          `db:"file_name" json:"file_name"`       // name of the file with it's extension, eg, "slug.jpg"
+	FileType    string          `db:"file_type" json:"file_type"`       // MIME type of the image, eg, "jpeg"
+	ObjectKey   string          `db:"object_key" json:"object_key"`     // The key used to store the image in object storage, eg, "2025/slug.jpg"
+	Slug        string          `db:"slug" json:"slug"`                 // ENCRYPTED: a unique slug for the image, used in URLs
+	SlugIndex   string          `db:"slug_index" json:"slug_index"`     // blind index for slug, indexed for fast lookups
+	Width       int             `db:"width" json:"width"`               // Width of the image in pixels
+	Height      int             `db:"height" json:"height"`             // Height of the image in pixels
+	Size        int64           `db:"size" json:"size"`                 // Size of the image file in bytes
+	ImageDate   string          `db:"image_date" json:"image_date"`     // ENCRYPTED: date when the image was taken or created, ie, from exif metadata
+	CreatedAt   data.CustomTime `db:"created_at" json:"created_at"`     // Timestamp when the image was created
+	UpdatedAt   data.CustomTime `db:"updated_at" json:"updated_at"`     // Timestamp when the image was last updated
+	IsArchived  bool            `db:"is_archived" json:"is_archived"`   // Indicates if the image is archived
+	IsPublished bool            `db:"is_published" json:"is_published"` // Indicates if the image is published and visible to users
 }
 
 // Validate checks the ImageRecord for valid data before storing it in the database.
