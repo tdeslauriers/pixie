@@ -26,6 +26,8 @@ type Handler interface {
 func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
 	return &permissionsHandler{
 		service: s,
+		s2s:     s2s,
+		iam:     iam,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).

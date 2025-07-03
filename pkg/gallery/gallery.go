@@ -19,6 +19,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/image"
+	"github.com/tdeslauriers/pixie/pkg/permissions"
 )
 
 // Gallery is the interface for engine that runs this service
@@ -163,6 +164,7 @@ func New(config *config.Config) (Gallery, error) {
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
 		imageService:     image.NewService(repository, indexer, cryptor, objStore),
+		permissions:      permissions.NewService(repository, indexer, cryptor),
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -183,6 +185,7 @@ type gallery struct {
 	iamVerifier      jwt.Verifier
 	identity         connect.S2sCaller
 	imageService     image.Service
+	permissions      permissions.Service
 
 	logger *slog.Logger
 }
@@ -206,6 +209,10 @@ func (g *gallery) Run() error {
 
 	// image handler
 	mux.HandleFunc("/images/", img.HandleImage) // trailing slash is so slugs can be appended to the path
+
+	// permissions handler
+	perm := permissions.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
+	mux.HandleFunc("/permissions", perm.HandlePermissions)
 
 	galleryServer := &connect.TlsServer{
 		Addr:      g.config.ServicePort,

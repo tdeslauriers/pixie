@@ -46,13 +46,13 @@ func (s *permissionsService) GetAllPermissions() ([]exo.Permission, error) {
 
 	qry := `SELECT
 			   uuid,
-			   service,
 			   name,
+			   service,
 			   description,
 			   created_at,
 			   active,
-			   slug, 
-			FROM permissions`
+			   slug
+			FROM permission`
 	var ps []exo.Permission
 	if err := s.sql.SelectRecords(qry, &ps); err != nil {
 		s.logger.Error("Failed to retrieve permissions", slog.Any("error", err))
