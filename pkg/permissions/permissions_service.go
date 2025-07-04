@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/pixie/internal/util"
@@ -14,6 +16,9 @@ import (
 type Service interface {
 	// GetAllPermissions retrieves all permissions in the database/persistence layer.
 	GetAllPermissions() ([]exo.Permission, error)
+
+	// CreatePermission creates a new permission in the database/persistence layer.
+	CreatePermission(p *Permission) (*Permission, error)
 }
 
 // NewService creates a new permissions service and provides a pointer to a concrete implementation.
@@ -166,4 +171,123 @@ func (s *permissionsService) decrypt(fieldname, encrpyted string, fieldCh chan s
 	}
 
 	fieldCh <- string(decrypted)
+}
+
+// CreatePermission implements the Service interface method to create a new permission in the database/persistence layer.
+func (s *permissionsService) CreatePermission(p *Permission) (*Permission, error) {
+
+	// validate the permission
+	// redundant check, but but good practice
+	if err := p.Validate(); err != nil {
+		s.logger.Error("Failed to validate permission", slog.Any("error", err))
+		return nil, fmt.Errorf("invalid permission: %v", err)
+	}
+
+	// create uuid and set it in the permission record
+	id, err := uuid.NewRandom()
+	if err != nil {
+		s.logger.Error("Failed to generate UUID for permission", slog.Any("error", err))
+		return nil, fmt.Errorf("failed to generate UUID for permission: %v", err)
+	}
+	p.Id = id.String()
+
+	// create created_at timestamp and set it in the permission record
+	now := time.Now().UTC()
+	p.CreatedAt = data.CustomTime{Time: now}
+
+	// create a slug for the permission and set it in the permission record
+	slug, err := uuid.NewRandom()
+	if err != nil {
+		s.logger.Error("Failed to generate slug for permission", slog.Any("error", err))
+		return nil, fmt.Errorf("failed to generate slug for permission: %v", err)
+	}
+	p.Slug = slug.String()
+
+	// generate a blind index for the slug and set it in the permission record
+	index, err := s.indexer.ObtainBlindIndex(p.Slug)
+	if err != nil {
+		s.logger.Error("Failed to generate blind index for slug", slog.Any("error", err))
+		return nil, fmt.Errorf("failed to generate blind index for slug: %v", err)
+	}
+	p.SlugIndex = index
+
+	// encrypt the sensitive fields in the permission record
+	var (
+		wg     sync.WaitGroup
+		nameCh = make(chan string, 1)
+		descCh = make(chan string, 1)
+		slugCh = make(chan string, 1)
+		errCh  = make(chan error, 3)
+	)
+
+	wg.Add(3)
+	go s.encrypt("name", p.Name, nameCh, errCh, &wg)
+	go s.encrypt("description", p.Description, descCh, errCh, &wg)
+	go s.encrypt("slug", p.Slug, slugCh, errCh, &wg)
+
+	wg.Wait()
+	close(nameCh)
+	close(descCh)
+	close(slugCh)
+	close(errCh)
+
+	// check for errors during encryption
+	if len(errCh) > 0 {
+		var errs []error
+		for e := range errCh {
+			errs = append(errs, e)
+		}
+		if len(errs) > 0 {
+			return nil, fmt.Errorf("failed to encrypt permission fields: %v", errors.Join(errs...))
+		}
+	}
+
+	// build encrypted permission record
+	encrypted := &Permission{
+		Id:          p.Id,
+		Name:        <-nameCh,
+		Service:     p.Service,
+		Description: <-descCh,
+		CreatedAt:   p.CreatedAt,
+		Active:      p.Active,
+		Slug:        <-slugCh,
+		SlugIndex:   p.SlugIndex,
+	}
+
+	// insert the permission record into the database
+	qry := `INSERT INTO permission (
+		uuid,
+		name,
+		service,
+		description,
+		created_at,
+		active,
+		slug,
+		slug_index
+	) VALUES (
+		?, ?, ?, ?, ?, ?, ?, ?
+	)`
+	if err := s.sql.InsertRecord(qry, encrypted); err != nil {
+		s.logger.Error("failed to insert permission record into database", slog.Any("error", err))
+		return nil, fmt.Errorf("failed to insert permission record into database: %v", err)
+	}
+
+	s.logger.Info(fmt.Sprintf("created permission '%s' in the database", encrypted.Id))
+
+	return p, nil
+}
+
+// encrypt is a helper method that encrypts sensitive fields in the permission data model.
+func (s *permissionsService) encrypt(field, plaintext string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	// encrypt service data
+	encrypted, err := s.cryptor.EncryptServiceData([]byte(plaintext))
+	if err != nil {
+		errCh <- fmt.Errorf("failed to encrypt '%s' field: %v", field, err)
+		return
+	}
+
+	fieldCh <- string(encrypted)
 }

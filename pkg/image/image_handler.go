@@ -170,7 +170,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		h.logger.Error(fmt.Sprintf("/images/ handler failed to validate incoming data: %v", err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
-			Message:    fmt.Sprintf("failed to validate incoming data: %v", err),
+			Message:    fmt.Sprintf("invalid image metadata: %v", err),
 		}
 		e.SendJsonErr(w)
 		return
