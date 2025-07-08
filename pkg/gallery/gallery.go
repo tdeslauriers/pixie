@@ -213,6 +213,7 @@ func (g *gallery) Run() error {
 	// permissions handler
 	perm := permissions.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/permissions", perm.HandlePermissions)
+	mux.HandleFunc("/permissions/", perm.HandlePermission) // trailing slash is so slugs can be appended to the path	
 
 	galleryServer := &connect.TlsServer{
 		Addr:      g.config.ServicePort,
