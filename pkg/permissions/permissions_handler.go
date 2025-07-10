@@ -245,8 +245,8 @@ func (h *permissionsHandler) createPermission(w http.ResponseWriter, r *http.Req
 	}
 
 	// validate service is correct
-	if strings.ToLower(strings.TrimSpace(cmd.Service)) != util.ServiceGallery {
-		h.logger.Error(fmt.Sprintf("Invalid service '%s' in permission command", cmd.Service))
+	if strings.ToLower(strings.TrimSpace(cmd.ServiceName)) != util.ServiceGallery {
+		h.logger.Error(fmt.Sprintf("Invalid service '%s' in permission command", cmd.ServiceName))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    "invalid service in add-permission command",
@@ -256,9 +256,10 @@ func (h *permissionsHandler) createPermission(w http.ResponseWriter, r *http.Req
 	}
 
 	// build premission record
-	p := &Permission{
+	p := &PermissionRecord{
+		ServiceName: strings.ToLower(strings.TrimSpace(cmd.ServiceName)),
+		Permission:  strings.ToUpper(strings.TrimSpace(cmd.Permission)),
 		Name:        strings.TrimSpace(cmd.Name),
-		Service:     strings.ToLower(strings.TrimSpace(cmd.Service)),
 		Description: cmd.Description,
 		Active:      cmd.Active,
 	}
@@ -311,7 +312,7 @@ func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Req
 	}
 
 	// get the request body
-	var cmd Permission
+	var cmd PermissionRecord
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error(fmt.Sprintf("failed to decode request body: %v", err))
 		e := connect.ErrorHttp{
@@ -336,8 +337,8 @@ func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Req
 	// validate service is correct.  This check is unnecessary since the value in the cmd is
 	// dropped, but it is a good practice to ensure the service is correct since a mismatch would
 	// indicate tampering of the request.
-	if strings.ToLower(strings.TrimSpace(cmd.Service)) != util.ServiceGallery {
-		h.logger.Error(fmt.Sprintf("invalid service '%s' in permission command", cmd.Service))
+	if strings.ToLower(strings.TrimSpace(cmd.ServiceName)) != util.ServiceGallery {
+		h.logger.Error(fmt.Sprintf("invalid service '%s' in permission command", cmd.ServiceName))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    "invalid service in update-permission command",
@@ -369,10 +370,11 @@ func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	updated := &Permission{
+	updated := &PermissionRecord{
 		Id:          record.Id,
-		Name:        cmd.Name,
-		Service:     record.Service, // drop the service value from the cmd, cannot be updated
+		ServiceName: record.ServiceName,                                 // drop the service value from the cmd, cannot be updated
+		Permission:  strings.ToUpper(strings.TrimSpace(cmd.Permission)), // ensure permission is uppercase
+		Name:        strings.TrimSpace(cmd.Name),
 		Description: cmd.Description,
 		Active:      cmd.Active,
 		CreatedAt:   record.CreatedAt,
@@ -392,6 +394,10 @@ func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Req
 	}
 
 	// audit record
+	if updated.Permission != record.Permission {
+		h.logger.Info(fmt.Sprintf("permission record's permission field updated from '%s' to '%s' by %s", record.Permission, updated.Permission, authrorized.Claims.Subject))
+	}
+
 	if updated.Name != record.Name {
 		h.logger.Info(fmt.Sprintf("permission name field updated from '%s' to '%s' by %s", record.Name, updated.Name, authrorized.Claims.Subject))
 	}
