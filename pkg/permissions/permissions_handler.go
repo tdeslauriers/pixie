@@ -28,7 +28,7 @@ type Handler interface {
 }
 
 // NewHandler creates a new permissions handler and provides a pointer to a concrete implementation.
-func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
+func NewHandler(s PermissionsService, s2s, iam jwt.Verifier) Handler {
 	return &permissionsHandler{
 		service: s,
 		s2s:     s2s,
@@ -45,7 +45,7 @@ var _ Handler = (*permissionsHandler)(nil)
 
 // permissionsHandler implements the Handler interface for managing permissions to gallery data models and images.
 type permissionsHandler struct {
-	service Service
+	service PermissionsService
 	s2s     jwt.Verifier
 	iam     jwt.Verifier
 

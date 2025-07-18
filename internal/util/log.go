@@ -7,6 +7,7 @@ const (
 	PackageMain        = "main"
 	PackageGallery     = "gallery"
 	PackageImage       = "image"
+	PackagePatron      = "patron"
 	PackagePermissions = "permissions"
 
 	// component keys
@@ -16,6 +17,7 @@ const (
 	ComponentImage       = "image"
 	ComponentGallery     = "gallery"
 	ComponentPermissions = "permissions"
+	ComponentPatron      = "patron"
 
 	// service keys
 	ServiceKey = "service"

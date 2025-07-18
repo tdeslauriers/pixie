@@ -14,7 +14,7 @@ import (
 	"github.com/tdeslauriers/pixie/internal/util"
 )
 
-type Service interface {
+type PermissionsService interface {
 	// GetAllPermissions retrieves all permissions in the database/persistence layer.
 	GetAllPermissions() ([]PermissionRecord, error)
 
@@ -29,12 +29,12 @@ type Service interface {
 	UpdatePermission(p *PermissionRecord) error
 }
 
-// NewService creates a new permissions service and provides a pointer to a concrete implementation.
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Service {
+// NewPermissionsService creates a new permissions service and provides a pointer to a concrete implementation.
+func NewPermissionsService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) PermissionsService {
 	return &permissionsService{
 		sql:     sql,
 		indexer: i,
-		cryptor: c,
+		cryptor: NewPermissionCryptor(c),
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -43,13 +43,13 @@ func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Service 
 	}
 }
 
-var _ Service = (*permissionsService)(nil)
+var _ PermissionsService = (*permissionsService)(nil)
 
 // permissionsService implements the Service interface for managing permissions to gallery data models and images.
 type permissionsService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
-	cryptor data.Cryptor
+	cryptor PermissionCryptor
 
 	logger *slog.Logger
 }
@@ -93,7 +93,7 @@ func (s *permissionsService) GetAllPermissions() ([]PermissionRecord, error) {
 		go func(permission PermissionRecord) {
 			defer wg.Done()
 
-			decrypted, err := s.decryptPermission(permission)
+			decrypted, err := s.cryptor.DecryptPermission(permission)
 			if err != nil {
 				errs <- fmt.Errorf("failed to decrypt permission '%s': %v", permission.Id, err)
 				return
@@ -172,71 +172,13 @@ func (s *permissionsService) GetPermissionBySlug(slug string) (*PermissionRecord
 	}
 
 	// prepare the permission by decrypting sensitive fields and removing unnecessary fields
-	prepared, err := s.decryptPermission(p)
+	prepared, err := s.cryptor.DecryptPermission(p)
 	if err != nil {
 		s.logger.Error(fmt.Sprintf("failed to prepare permission '%s': %v", slug, err))
 		return nil, fmt.Errorf("failed to prepare permission 'slug %s': %v", slug, err)
 	}
 
 	return prepared, nil
-}
-
-// decryptPermission is a helper method that decrypts sensitive fields  and removes uncessary fields in the permission data model.
-func (s *permissionsService) decryptPermission(p PermissionRecord) (*PermissionRecord, error) {
-
-	var (
-		wg     sync.WaitGroup
-		pmCh   = make(chan string, 1)
-		nameCh = make(chan string, 1)
-		descCh = make(chan string, 1)
-		slugCh = make(chan string, 1)
-		errCh  = make(chan error, 4)
-	)
-
-	wg.Add(4)
-	go s.decrypt("permission", p.Permission, pmCh, errCh, &wg)
-	go s.decrypt("name", p.Name, nameCh, errCh, &wg)
-	go s.decrypt("description", p.Description, descCh, errCh, &wg)
-	go s.decrypt("slug", p.Slug, slugCh, errCh, &wg)
-
-	wg.Wait()
-	close(pmCh)
-	close(nameCh)
-	close(descCh)
-	close(slugCh)
-	close(errCh)
-
-	// check for errors during decryption
-	if len(errCh) > 0 {
-		var errs []error
-		for e := range errCh {
-			errs = append(errs, e)
-		}
-		if len(errs) > 0 {
-			return nil, errors.Join(errs...)
-		}
-	}
-
-	p.Permission = <-pmCh
-	p.Name = <-nameCh
-	p.Description = <-descCh
-	p.Slug = <-slugCh
-	p.SlugIndex = "" // clear slug index as it is not needed in the response
-
-	return &p, nil
-}
-
-func (s *permissionsService) decrypt(fieldname, encrpyted string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	// decrypt service data
-	decrypted, err := s.cryptor.DecryptServiceData(encrpyted)
-	if err != nil {
-		errCh <- fmt.Errorf("failed to decrypt '%s' field: %v", fieldname, err)
-	}
-
-	fieldCh <- string(decrypted)
 }
 
 // CreatePermission implements the Service interface method to create a new permission in the database/persistence layer.
@@ -278,7 +220,7 @@ func (s *permissionsService) CreatePermission(p *PermissionRecord) (*PermissionR
 	p.SlugIndex = index
 
 	// encrypt the sensitive fields in the permission record
-	encrypted, err := s.encryptPermission(p)
+	encrypted, err := s.cryptor.EncryptPermission(p)
 	if err != nil {
 		s.logger.Error(fmt.Sprintf("Failed to encrypt permission '%s': %v", p.Id, err))
 		return nil, fmt.Errorf("failed to encrypt permission '%s': %v", p.Id, err)
@@ -330,7 +272,7 @@ func (s *permissionsService) UpdatePermission(p *PermissionRecord) error {
 	}
 
 	// encrypt fields for persisting the updated permission
-	encrypted, err := s.encryptPermission(p)
+	encrypted, err := s.cryptor.EncryptPermission(p)
 	if err != nil {
 		s.logger.Error(fmt.Sprintf("Failed to encrypt permission '%s': %v", p.Id, err))
 		return fmt.Errorf("failed to encrypt permission '%s': %v", p.Id, err)
@@ -352,71 +294,4 @@ func (s *permissionsService) UpdatePermission(p *PermissionRecord) error {
 
 	s.logger.Info(fmt.Sprintf("updated permission '%s' in the database", p.Id))
 	return nil
-}
-
-// encryptPermission is a helper method that encrypts sensitive fields
-// in the permission data model, preparing the record for storage in the database.
-func (s *permissionsService) encryptPermission(p *PermissionRecord) (*PermissionRecord, error) {
-
-	var (
-		wg     sync.WaitGroup
-		pmCh   = make(chan string, 1)
-		nameCh = make(chan string, 1)
-		descCh = make(chan string, 1)
-		slugCh = make(chan string, 1)
-		errCh  = make(chan error, 4)
-	)
-
-	wg.Add(4)
-	go s.encrypt("permission", p.Permission, pmCh, errCh, &wg)
-	go s.encrypt("name", p.Name, nameCh, errCh, &wg)
-	go s.encrypt("description", p.Description, descCh, errCh, &wg)
-	go s.encrypt("slug", p.Slug, slugCh, errCh, &wg)
-
-	wg.Wait()
-	close(pmCh)
-	close(nameCh)
-	close(descCh)
-	close(slugCh)
-	close(errCh)
-
-	// check for errors during encryption
-	if len(errCh) > 0 {
-		var errs []error
-		for e := range errCh {
-			errs = append(errs, e)
-		}
-		if len(errs) > 0 {
-			return nil, errors.Join(errs...)
-		}
-	}
-
-	encrypted := &PermissionRecord{
-		Id:          p.Id,
-		ServiceName: p.ServiceName,
-		Permission:  <-pmCh,
-		Name:        <-nameCh,
-		Description: <-descCh,
-		CreatedAt:   p.CreatedAt,
-		Active:      p.Active,
-		Slug:        <-slugCh,
-		SlugIndex:   p.SlugIndex, // slug index is not encrypted, is hash
-	}
-
-	return encrypted, nil
-}
-
-// encrypt is a helper method that encrypts sensitive fields in the permission data model.
-func (s *permissionsService) encrypt(field, plaintext string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	// encrypt service data
-	encrypted, err := s.cryptor.EncryptServiceData([]byte(plaintext))
-	if err != nil {
-		errCh <- fmt.Errorf("failed to encrypt '%s' field: %v", field, err)
-		return
-	}
-
-	fieldCh <- string(encrypted)
 }
