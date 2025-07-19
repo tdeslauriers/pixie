@@ -1,4 +1,4 @@
-package permissions
+package permission
 
 import (
 	"encoding/json"
@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	readPermissionsAllowed  = []string{"r:pixie:permissions:*"}
-	writePermissionsAllowed = []string{"w:pixie:permissions:*"}
+	readPermissionsAllowed  = []string{"r:pixie:*", "r:pixie:permissions:*"}
+	writePermissionsAllowed = []string{"w:pixie:*", "w:pixie:permissions:*"}
 )
 
 // Handler defines the methods for interacting with the /pms/permissions endpoint.
@@ -121,7 +121,7 @@ func (h *permissionsHandler) getAllPermissions(w http.ResponseWriter, r *http.Re
 	// no need for fine-grained permissions here at this time
 
 	// retrieve all permissions from the service
-	permissions, err := h.service.GetAllPermissions()
+	_, permissions, err := h.service.GetAllPermissions()
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("failed to retrieve permissions: %v", err))
 		e := connect.ErrorHttp{

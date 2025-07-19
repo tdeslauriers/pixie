@@ -1,4 +1,4 @@
-package permissions
+package permission
 
 import (
 	"database/sql"
@@ -16,7 +16,7 @@ import (
 
 type PermissionsService interface {
 	// GetAllPermissions retrieves all permissions in the database/persistence layer.
-	GetAllPermissions() ([]PermissionRecord, error)
+	GetAllPermissions() (map[string]PermissionRecord, []PermissionRecord, error)
 
 	// GetPermissionBySlug retrieves a permission by its slug from the database/persistence layer.
 	GetPermissionBySlug(slug string) (*PermissionRecord, error)
@@ -55,30 +55,31 @@ type permissionsService struct {
 }
 
 // GetAllPermissions implements the Service interface method to retrieve all permissions from the database/persistence layer.
-func (s *permissionsService) GetAllPermissions() ([]PermissionRecord, error) {
+func (s *permissionsService) GetAllPermissions() (map[string]PermissionRecord, []PermissionRecord, error) {
 
-	qry := `SELECT
-			   uuid,
-			   service_name,
-			   permission,
-			   name,
-			   description,
-			   created_at,
-			   active,
-			   slug,
-			   slug_index
-			FROM permission`
+	qry := `
+		SELECT
+			uuid,
+			service_name,
+			permission,
+			name,
+			description,
+			created_at,
+			active,
+			slug,
+			slug_index
+		FROM permission`
 	var ps []PermissionRecord
 	if err := s.sql.SelectRecords(qry, &ps); err != nil {
 		s.logger.Error("Failed to retrieve permissions", slog.Any("error", err))
-		return nil, err
+		return nil, nil, err
 	}
 
 	// check if any permissions were found
 	// if not, return
 	if len(ps) == 0 {
 		s.logger.Warn("No permissions found in the database")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// if records found, decrypt sensitive fields: name, permission, description, slug
@@ -114,19 +115,21 @@ func (s *permissionsService) GetAllPermissions() ([]PermissionRecord, error) {
 			errsList = append(errsList, e)
 		}
 		if len(errsList) > 0 {
-			return nil, errors.Join(errsList...)
+			return nil, nil, errors.Join(errsList...)
 		}
 	}
 
 	// collect decrypted permissions
-	var permissions []PermissionRecord
+	permissions := make([]PermissionRecord, 0, len(ps))
+	psMap := make(map[string]PermissionRecord, len(ps))
 	for p := range pmChan {
 		permissions = append(permissions, p)
+		psMap[p.Slug] = p
 	}
 
 	s.logger.Info(fmt.Sprintf("retrieved and decrypted %d permission(s) from the database", len(permissions)))
 
-	return permissions, nil
+	return psMap, permissions, nil
 }
 
 // GetPermissionBySlug implements the Service interface method to retrieve a permission by its slug from the database/persistence layer.
@@ -227,19 +230,20 @@ func (s *permissionsService) CreatePermission(p *PermissionRecord) (*PermissionR
 	}
 
 	// insert the permission record into the database
-	qry := `INSERT INTO permission (
-		uuid,
-		service_name,
-		permission,
-		name,
-		description,
-		created_at,
-		active,
-		slug,
-		slug_index
-	) VALUES (
-		?, ?, ?, ?, ?, ?, ?, ?, ?
-	)`
+	qry := `
+		INSERT INTO permission (
+			uuid,
+			service_name,
+			permission,
+			name,
+			description,
+			created_at,
+			active,
+			slug,
+			slug_index
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?
+		)`
 	if err := s.sql.InsertRecord(qry, *encrypted); err != nil {
 		s.logger.Error("failed to insert permission record into database", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to insert permission record into database: %v", err)

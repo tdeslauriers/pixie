@@ -1,6 +1,10 @@
 package patron
 
-import "github.com/tdeslauriers/carapace/pkg/data"
+import (
+	"github.com/tdeslauriers/carapace/pkg/data"
+	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/pixie/pkg/permission"
+)
 
 // Handler is an interface aggregation of all handler interfaces that manage patron records.
 type Handler interface {
@@ -8,6 +12,13 @@ type Handler interface {
 }
 
 var _ Handler = (*handler)(nil)
+
+// NewHandler creates a new Handler instance, returning a pointer to the concrete implementation.
+func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
+	return &handler{
+		PermissionHandler: NewPermissionHandler(s, s2s, iam),
+	}
+}
 
 // handler is the concrete implementation of the Handler interface.
 type handler struct {
@@ -52,4 +63,16 @@ type PatronPermissionRecord struct {
 	PatronId     string          `db:"patron_uuid" json:"patron_id,omitempty"`
 	PermissionId string          `db:"permission_uuid" json:"permission_id,omitempty"`
 	CreatedAt    data.CustomTime `db:"created_at" json:"created_at,omitempty"`
+}
+
+// PatronRecord is a model which represents a patron record in the database.
+type Patron struct {
+	Id          string                        `json:"uuid,omitempty"`
+	Username    string                        `json:"username"`
+	Slug        string                        `json:"slug,omitempty"`
+	CreatedAt   data.CustomTime               `json:"created_at,omitempty"`
+	UpdatedAt   data.CustomTime               `json:"updated_at,omitempty"`
+	IsArchived  bool                          `json:"is_archived"`
+	IsActive    bool                          `json:"is_active"`
+	Permissions []permission.PermissionRecord `json:"permissions,omitempty"`
 }

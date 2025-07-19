@@ -1,4 +1,4 @@
-package permissions
+package permission
 
 import (
 	"fmt"
@@ -33,10 +33,10 @@ type service struct {
 
 // PermissionRecord is a model which represents a permission record in the database.
 type PermissionRecord struct {
-	Id          string          `db:"uuid" json:"uuid,omitempty"` 
-	ServiceName string          `db:"service_name" json:"service_name"` 
-	Permission  string          `db:"permission" json:"permission"` // encrypted
-	Name        string          `db:"name" json:"name"` // encrypted
+	Id          string          `db:"uuid" json:"uuid,omitempty"`
+	ServiceName string          `db:"service_name" json:"service_name"`
+	Permission  string          `db:"permission" json:"permission"`   // encrypted
+	Name        string          `db:"name" json:"name"`               // encrypted
 	Description string          `db:"description" json:"description"` // encrypted
 	CreatedAt   data.CustomTime `db:"created_at" json:"created_at,omitempty"`
 	Active      bool            `db:"active" json:"active"`
@@ -105,4 +105,12 @@ func (cmd *UpdatePermissionsCmd) Validate() error {
 	}
 
 	return nil
+}
+
+// PatronPermissionXrefRecord is a model which represents a patron permission cross-reference record in the database.
+type PatronPermissionXrefRecord struct {
+	Id           int             `db:"id" json:"id,omitempty"`
+	PatronId     string          `db:"patron_uuid" json:"patron_uuid,omitempty"`
+	PermissionId string          `db:"permission_uuid" json:"permission_uuid,omitempty"`
+	CreatedAt    data.CustomTime `db:"created_at" json:"created_at,omitempty"`
 }

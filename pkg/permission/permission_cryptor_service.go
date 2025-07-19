@@ -1,4 +1,4 @@
-package permissions
+package permission
 
 import (
 	"errors"
@@ -33,7 +33,7 @@ type permissionCryptor struct {
 }
 
 // decryptPermission is a method that decrypts sensitive fields  and removes uncessary fields in the permission data model.
-func (s *permissionCryptor) DecryptPermission(p PermissionRecord) (*PermissionRecord, error) {
+func (c *permissionCryptor) DecryptPermission(p PermissionRecord) (*PermissionRecord, error) {
 
 	var (
 		wg     sync.WaitGroup
@@ -45,10 +45,10 @@ func (s *permissionCryptor) DecryptPermission(p PermissionRecord) (*PermissionRe
 	)
 
 	wg.Add(4)
-	go s.decrypt("permission", p.Permission, pmCh, errCh, &wg)
-	go s.decrypt("name", p.Name, nameCh, errCh, &wg)
-	go s.decrypt("description", p.Description, descCh, errCh, &wg)
-	go s.decrypt("slug", p.Slug, slugCh, errCh, &wg)
+	go c.decrypt("permission", p.Permission, pmCh, errCh, &wg)
+	go c.decrypt("name", p.Name, nameCh, errCh, &wg)
+	go c.decrypt("description", p.Description, descCh, errCh, &wg)
+	go c.decrypt("slug", p.Slug, slugCh, errCh, &wg)
 
 	wg.Wait()
 	close(pmCh)
@@ -78,12 +78,12 @@ func (s *permissionCryptor) DecryptPermission(p PermissionRecord) (*PermissionRe
 }
 
 // decrypt is a helper method that decrypts a field and sends the result to the channel.
-func (s *permissionCryptor) decrypt(fieldname, encrpyted string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
+func (c *permissionCryptor) decrypt(fieldname, encrpyted string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
 	// decrypt service data
-	decrypted, err := s.cryptor.DecryptServiceData(encrpyted)
+	decrypted, err := c.cryptor.DecryptServiceData(encrpyted)
 	if err != nil {
 		errCh <- fmt.Errorf("failed to decrypt '%s' field: %v", fieldname, err)
 	}
@@ -93,7 +93,7 @@ func (s *permissionCryptor) decrypt(fieldname, encrpyted string, fieldCh chan st
 
 // encryptPermission  method that encrypts sensitive fields
 // in the permission data model, preparing the record for storage in the database.
-func (s *permissionCryptor) EncryptPermission(p *PermissionRecord) (*PermissionRecord, error) {
+func (c *permissionCryptor) EncryptPermission(p *PermissionRecord) (*PermissionRecord, error) {
 
 	var (
 		wg     sync.WaitGroup
@@ -105,10 +105,10 @@ func (s *permissionCryptor) EncryptPermission(p *PermissionRecord) (*PermissionR
 	)
 
 	wg.Add(4)
-	go s.encrypt("permission", p.Permission, pmCh, errCh, &wg)
-	go s.encrypt("name", p.Name, nameCh, errCh, &wg)
-	go s.encrypt("description", p.Description, descCh, errCh, &wg)
-	go s.encrypt("slug", p.Slug, slugCh, errCh, &wg)
+	go c.encrypt("permission", p.Permission, pmCh, errCh, &wg)
+	go c.encrypt("name", p.Name, nameCh, errCh, &wg)
+	go c.encrypt("description", p.Description, descCh, errCh, &wg)
+	go c.encrypt("slug", p.Slug, slugCh, errCh, &wg)
 
 	wg.Wait()
 	close(pmCh)
@@ -144,12 +144,12 @@ func (s *permissionCryptor) EncryptPermission(p *PermissionRecord) (*PermissionR
 }
 
 // encrypt is a helper method that encrypts sensitive fields in the permission data model.
-func (s *permissionCryptor) encrypt(field, plaintext string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
+func (c *permissionCryptor) encrypt(field, plaintext string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
 	// encrypt service data
-	encrypted, err := s.cryptor.EncryptServiceData([]byte(plaintext))
+	encrypted, err := c.cryptor.EncryptServiceData([]byte(plaintext))
 	if err != nil {
 		errCh <- fmt.Errorf("failed to encrypt '%s' field: %v", field, err)
 		return

@@ -19,7 +19,8 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/image"
-	"github.com/tdeslauriers/pixie/pkg/permissions"
+	"github.com/tdeslauriers/pixie/pkg/patron"
+	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 // Gallery is the interface for engine that runs this service
@@ -163,8 +164,9 @@ func New(config *config.Config) (Gallery, error) {
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
-		imageService:     image.NewService(repository, indexer, cryptor, objStore),
-		permissions:      permissions.NewService(repository, indexer, cryptor),
+		images:           image.NewService(repository, indexer, cryptor, objStore),
+		patrons:          patron.NewService(repository, indexer, cryptor),
+		permissions:      permission.NewService(repository, indexer, cryptor),
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -184,8 +186,9 @@ type gallery struct {
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
 	identity         connect.S2sCaller
-	imageService     image.Service
-	permissions      permissions.PermissionsService
+	images           image.Service
+	patrons          patron.Service
+	permissions      permission.Service
 
 	logger *slog.Logger
 }
@@ -201,17 +204,19 @@ func (g *gallery) CloseDb() error {
 // Run runs the gallery service.
 func (g *gallery) Run() error {
 
-	// image handler
-	img := image.NewHandler(g.imageService, g.s2sVerifier, g.iamVerifier)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
 	// image handler
+	img := image.NewHandler(g.images, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/images/", img.HandleImage) // trailing slash is so slugs can be appended to the path
 
+	// patron handler
+	pat := patron.NewHandler(g.patrons, g.s2sVerifier, g.iamVerifier)
+	mux.HandleFunc("/patrons/permissions", pat.HandlePermissions) // handles updates to patron permissions only
+
 	// permissions handler
-	perm := permissions.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
+	perm := permission.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/permissions", perm.HandlePermissions)
 	mux.HandleFunc("/permissions/", perm.HandlePermission) // trailing slash is so slugs can be appended to the path
 

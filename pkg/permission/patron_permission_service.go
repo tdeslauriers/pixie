@@ -1,8 +1,9 @@
-package permissions
+package permission
 
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -13,6 +14,12 @@ import (
 type PatronPermissionService interface {
 	// GetPatronPermissions returns a map and a list of a patron's permissions.
 	GetPatronPermissions(username string) (map[string]PermissionRecord, []PermissionRecord, error)
+
+	// AddPermissionToPatron adds a permission to a patron's permissions in the database.
+	AddPermissionToPatron(patronId, permissionId string) error
+
+	// RemovePermissionFromPatron removes a permission from a patron's permissions in the database.
+	RemovePermissionFromPatron(patronId, permissionId string) error
 }
 
 // NewPatronPermissionService creates a new PatronPermissionService instance, returning a pointer to the concrete implementation.
@@ -21,6 +28,7 @@ func NewPatronPermissionService(sql data.SqlRepository, i data.Indexer, c data.C
 		sql:     sql,
 		indexer: i,
 		cryptor: NewPermissionCryptor(c),
+
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePermissions)).
 			With(slog.String(util.ComponentKey, util.ComponentPermissions)).
@@ -94,4 +102,58 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 
 	// return the permissions
 	return psMap, records, nil
+}
+
+// AddPermissionToPatron is the concrete implementation of the interface method which
+// adds a permission to a patron's permissions in the database.
+func (s *patronPermissionService) AddPermissionToPatron(patronId, permissionId string) error {
+
+	// validate patronId is a well-formed UUID
+	if !validate.IsValidUuid(patronId) {
+		return fmt.Errorf("invalid patron ID: %s", patronId)
+	}
+
+	// validate permissionId is a well-formed UUID
+	if !validate.IsValidUuid(permissionId) {
+		return fmt.Errorf("invalid permission ID: %s", permissionId)
+	}
+
+	// build the xref record to insert
+	xref := PatronPermissionXrefRecord{
+		Id:           0, // auto-incremented by the database
+		PatronId:     patronId,
+		PermissionId: permissionId,
+		CreatedAt:    data.CustomTime{Time: time.Now().UTC()},
+	}
+
+	// insert the xref record into the database
+	qry := `INSERT INTO patron_permission (id, patron_uuid, permission_uuid, created_at) VALUES (?, ?, ?, ?)`
+	if err := s.sql.InsertRecord(qry, xref); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// RemovePermissionFromPatron is the concrete implementation of the interface method which
+// removes a permission from a patron's permissions in the database.
+func (s *patronPermissionService) RemovePermissionFromPatron(patronId, permissionId string) error {
+
+	// validate patronId is a well-formed UUID
+	if !validate.IsValidUuid(patronId) {
+		return fmt.Errorf("invalid patron ID: %s", patronId)
+	}
+
+	// validate permissionId is a well-formed UUID
+	if !validate.IsValidUuid(permissionId) {
+		return fmt.Errorf("invalid permission ID: %s", permissionId)
+	}
+
+	// delete the xref record from the database
+	qry := `DELETE FROM patron_permission WHERE patron_uuid = ? AND permission_uuid = ?`
+	if err := s.sql.DeleteRecord(qry, patronId, permissionId); err != nil {
+		return fmt.Errorf("failed to remove permission '%s' from patron '%s': %v", permissionId, patronId, err)
+	}
+
+	return nil
 }
