@@ -3,7 +3,7 @@ package patron
 import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
-	"github.com/tdeslauriers/pixie/pkg/permission"
+	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 )
 
 // Handler is an interface aggregation of all handler interfaces that manage patron records.
@@ -67,12 +67,12 @@ type PatronPermissionRecord struct {
 
 // PatronRecord is a model which represents a patron record in the database.
 type Patron struct {
-	Id          string                        `json:"uuid,omitempty"`
-	Username    string                        `json:"username"`
-	Slug        string                        `json:"slug,omitempty"`
-	CreatedAt   data.CustomTime               `json:"created_at,omitempty"`
-	UpdatedAt   data.CustomTime               `json:"updated_at,omitempty"`
-	IsArchived  bool                          `json:"is_archived"`
-	IsActive    bool                          `json:"is_active"`
-	Permissions []permission.PermissionRecord `json:"permissions,omitempty"`
+	Id          string                 `json:"uuid,omitempty"`
+	Username    string                 `json:"username"`
+	Slug        string                 `json:"slug,omitempty"`
+	CreatedAt   data.CustomTime        `json:"created_at,omitempty"`
+	UpdatedAt   data.CustomTime        `json:"updated_at,omitempty"`
+	IsArchived  bool                   `json:"is_archived"`
+	IsActive    bool                   `json:"is_active"`
+	Permissions []exo.PermissionRecord `json:"permissions,omitempty"`
 }

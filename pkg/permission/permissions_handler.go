@@ -9,6 +9,7 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/pixie/internal/util"
 )
@@ -28,7 +29,7 @@ type Handler interface {
 }
 
 // NewHandler creates a new permissions handler and provides a pointer to a concrete implementation.
-func NewHandler(s PermissionsService, s2s, iam jwt.Verifier) Handler {
+func NewHandler(s permissions.Service, s2s, iam jwt.Verifier) Handler {
 	return &permissionsHandler{
 		service: s,
 		s2s:     s2s,
@@ -45,7 +46,7 @@ var _ Handler = (*permissionsHandler)(nil)
 
 // permissionsHandler implements the Handler interface for managing permissions to gallery data models and images.
 type permissionsHandler struct {
-	service PermissionsService
+	service permissions.Service
 	s2s     jwt.Verifier
 	iam     jwt.Verifier
 
@@ -256,7 +257,7 @@ func (h *permissionsHandler) createPermission(w http.ResponseWriter, r *http.Req
 	}
 
 	// build premission record
-	p := &PermissionRecord{
+	p := &permissions.PermissionRecord{
 		ServiceName: strings.ToLower(strings.TrimSpace(cmd.ServiceName)),
 		Permission:  strings.ToUpper(strings.TrimSpace(cmd.Permission)),
 		Name:        strings.TrimSpace(cmd.Name),
@@ -312,7 +313,7 @@ func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Req
 	}
 
 	// get the request body
-	var cmd PermissionRecord
+	var cmd permissions.PermissionRecord
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error(fmt.Sprintf("failed to decode request body: %v", err))
 		e := connect.ErrorHttp{
@@ -370,7 +371,7 @@ func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	updated := &PermissionRecord{
+	updated := &permissions.PermissionRecord{
 		Id:          record.Id,
 		ServiceName: record.ServiceName,                                 // drop the service value from the cmd, cannot be updated
 		Permission:  strings.ToUpper(strings.TrimSpace(cmd.Permission)), // ensure permission is uppercase

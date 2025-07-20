@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
+	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
 )
@@ -13,7 +14,7 @@ import (
 // PermissionsService is the interface for managing a patrons permissions in the database.
 type PatronPermissionService interface {
 	// GetPatronPermissions returns a map and a list of a patron's permissions.
-	GetPatronPermissions(username string) (map[string]PermissionRecord, []PermissionRecord, error)
+	GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
 
 	// AddPermissionToPatron adds a permission to a patron's permissions in the database.
 	AddPermissionToPatron(patronId, permissionId string) error
@@ -27,7 +28,7 @@ func NewPatronPermissionService(sql data.SqlRepository, i data.Indexer, c data.C
 	return &patronPermissionService{
 		sql:     sql,
 		indexer: i,
-		cryptor: NewPermissionCryptor(c),
+		cryptor: exo.NewPermissionCryptor(c),
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePermissions)).
@@ -41,13 +42,13 @@ var _ PatronPermissionService = (*patronPermissionService)(nil)
 type patronPermissionService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
-	cryptor PermissionCryptor
+	cryptor exo.PermissionCryptor
 
 	logger *slog.Logger
 }
 
 // GetPatronPermissions retrieves a patron's permissions from the database.
-func (s *patronPermissionService) GetPatronPermissions(username string) (map[string]PermissionRecord, []PermissionRecord, error) {
+func (s *patronPermissionService) GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
 
 	// validate the username
 	// redundant check, but good practice
@@ -78,7 +79,7 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 			LEFT OUTER JOIN patron pat ON pp.patron_uuid = pat.uuid
 		WHERE pat.user_index = ?
 			AND p.active = TRUE`
-	var records []PermissionRecord
+	var records []exo.PermissionRecord
 	if err := s.sql.SelectRecords(qry, &records, index); err != nil {
 		s.logger.Error(fmt.Sprintf("failed to retrieve permissions for patron '%s': %v", username, err))
 		return nil, nil, err
@@ -90,7 +91,7 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 	}
 
 	// decrypt and create a map of permissions
-	psMap := make(map[string]PermissionRecord, len(records))
+	psMap := make(map[string]exo.PermissionRecord, len(records))
 	for i, record := range records {
 		decrypted, err := s.cryptor.DecryptPermission(record)
 		if err != nil {

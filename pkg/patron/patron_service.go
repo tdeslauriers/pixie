@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
+	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/permission"
@@ -21,7 +22,7 @@ type PatronService interface {
 
 	// UpdatePatronPermissions updates a patron's permissions in the database and returns
 	// a map of permissions that were added and removed.
-	UpdatePatronPermissions(p *Patron, permissions []string) (map[string]permission.PermissionRecord, map[string]permission.PermissionRecord, error)
+	UpdatePatronPermissions(p *Patron, permissions []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error)
 }
 
 // NewService creates a new Patron service instance, returning a pointer to the concrete implementation.
@@ -167,7 +168,7 @@ func (s *patronService) decryptField(fieldname, fieldvalue string, fieldCh chan<
 
 // UpdatePatronPermissions is the concrete implementation of the interface method which
 // updates a patron's permissions in the database.
-func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (map[string]permission.PermissionRecord, map[string]permission.PermissionRecord, error) {
+func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error) {
 
 	if pat == nil {
 		return nil, nil, fmt.Errorf("patron record is nil")
@@ -193,7 +194,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 	// build update map of permissions
 	// return an error if any slug is not found in the permissions map
 	// key is the permission slug
-	updated := make(map[string]permission.PermissionRecord, len(slugs))
+	updated := make(map[string]exo.PermissionRecord, len(slugs))
 	for _, slug := range slugs {
 		if p, ok := all[slug]; ok {
 			updated[slug] = p
@@ -204,13 +205,13 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 
 	// build current map of permissions
 	// key is the permission slug
-	current := make(map[string]permission.PermissionRecord, len(pat.Permissions))
+	current := make(map[string]exo.PermissionRecord, len(pat.Permissions))
 	for _, pm := range pat.Permissions {
 		current[pm.Slug] = pm
 	}
 
 	// build map of permissions to add to the patron
-	toAdd := make(map[string]permission.PermissionRecord, len(updated))
+	toAdd := make(map[string]exo.PermissionRecord, len(updated))
 	for slug, pm := range updated {
 		if _, exists := current[slug]; !exists {
 			toAdd[slug] = pm
@@ -218,7 +219,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 	}
 
 	// build map of permissions to remove from the patron
-	toRemove := make(map[string]permission.PermissionRecord, len(current))
+	toRemove := make(map[string]exo.PermissionRecord, len(current))
 	for slug, pm := range current {
 		if _, exists := updated[slug]; !exists {
 			toRemove[slug] = pm
@@ -240,7 +241,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 	if len(toAdd) > 0 {
 		for _, pm := range toAdd {
 			wg.Add(1)
-			go func(permission permission.PermissionRecord, eCh chan<- error, wg *sync.WaitGroup) {
+			go func(permission exo.PermissionRecord, eCh chan<- error, wg *sync.WaitGroup) {
 				defer wg.Done()
 
 				if err := s.permissions.AddPermissionToPatron(pat.Id, permission.Id); err != nil {
@@ -257,7 +258,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 	if len(toRemove) > 0 {
 		for _, pm := range toRemove {
 			wg.Add(1)
-			go func(permission permission.PermissionRecord, eCh chan<- error, wg *sync.WaitGroup) {
+			go func(permission exo.PermissionRecord, eCh chan<- error, wg *sync.WaitGroup) {
 				defer wg.Done()
 
 				if err := s.permissions.RemovePermissionFromPatron(pat.Id, permission.Id); err != nil {
