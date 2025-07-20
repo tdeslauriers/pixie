@@ -8,8 +8,8 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 // scopes requried to access /patrons/permissions endpoint
@@ -21,7 +21,7 @@ var (
 // PermissionHandler is the interface for handling updates to a users permissions.
 type PermissionHandler interface {
 
-	// HandlePermissions handles the request to update a users permissions.
+	// HandlePermissions handles the requests to update a users permissions.
 	HandlePermissions(w http.ResponseWriter, r *http.Request)
 }
 
@@ -76,7 +76,7 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 	// validate the s2s token
 	s2sToken := r.Header.Get("Service-Authorization")
 	if _, err := h.s2sVerifier.BuildAuthorized(updatePatronPermissionsAllowed, s2sToken); err != nil {
-		h.logger.Error(fmt.Sprintf("paton permissions endpoint failed to verify service token: %v", err))
+		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify service token: %v", err))
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
@@ -91,7 +91,7 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 	}
 
 	// get the request body
-	var cmd permission.UpdatePermissionsCmd
+	var cmd permissions.UpdatePermissionsCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error(fmt.Sprintf("failed to decode request body: %v", err))
 		e := connect.ErrorHttp{
@@ -118,7 +118,7 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("failed to retrieve patron by email '%s': %v", cmd.Entity, err))
 		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
+			StatusCode: http.StatusNotFound,
 			Message:    fmt.Sprintf("failed to retrieve patron by email '%s': %v", cmd.Entity, err),
 		}
 		e.SendJsonErr(w)

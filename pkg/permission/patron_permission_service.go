@@ -130,7 +130,7 @@ func (s *patronPermissionService) AddPermissionToPatron(patronId, permissionId s
 	// insert the xref record into the database
 	qry := `INSERT INTO patron_permission (id, patron_uuid, permission_uuid, created_at) VALUES (?, ?, ?, ?)`
 	if err := s.sql.InsertRecord(qry, xref); err != nil {
-		return err
+		return fmt.Errorf("failed to add permission '%s' to patron '%s': %v", permissionId, patronId, err)
 	}
 
 	return nil

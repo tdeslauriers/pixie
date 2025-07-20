@@ -22,7 +22,8 @@ type PatronService interface {
 
 	// UpdatePatronPermissions updates a patron's permissions in the database and returns
 	// a map of permissions that were added and removed.
-	UpdatePatronPermissions(p *Patron, permissions []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error)
+	// slugs are the permission slugs to update for the patron.
+	UpdatePatronPermissions(p *Patron, slugs []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error)
 }
 
 // NewService creates a new Patron service instance, returning a pointer to the concrete implementation.
@@ -174,10 +175,6 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 		return nil, nil, fmt.Errorf("patron record is nil")
 	}
 
-	if len(slugs) == 0 {
-		return nil, nil, fmt.Errorf("no permission slugs provided for patron '%s'", pat.Username)
-	}
-
 	// validate the permissions slugs are well formed uuids
 	for _, slug := range slugs {
 		if !validate.IsValidUuid(slug) {
@@ -193,7 +190,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 
 	// build update map of permissions
 	// return an error if any slug is not found in the permissions map
-	// key is the permission slug
+	// key is the permission record's slug
 	updated := make(map[string]exo.PermissionRecord, len(slugs))
 	for _, slug := range slugs {
 		if p, ok := all[slug]; ok {
