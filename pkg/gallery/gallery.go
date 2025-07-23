@@ -213,7 +213,7 @@ func (g *gallery) Run() error {
 
 	// patron handler
 	pat := patron.NewHandler(g.patrons, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/patrons/permissions", pat.HandlePermissions) // handles updates to patron permissions only
+	mux.HandleFunc("/patrons/permissions", pat.HandlePermissions) // retrieves users permissions and handles updates to patron permissions
 
 	// permissions handler
 	perm := permission.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)

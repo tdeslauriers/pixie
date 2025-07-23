@@ -20,6 +20,11 @@ type PatronService interface {
 	// performs necessary decryption.
 	GetByUsername(username string) (*Patron, error)
 
+	// GetPatronPermissions retrieves a patron's permissions from the database.
+	// NOTE: at this time, this is a wrapper around the permissions service's function with the same name.
+	// It is included here for consistency with the interface.
+	GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
+
 	// UpdatePatronPermissions updates a patron's permissions in the database and returns
 	// a map of permissions that were added and removed.
 	// slugs are the permission slugs to update for the patron.
@@ -165,6 +170,15 @@ func (s *patronService) decryptField(fieldname, fieldvalue string, fieldCh chan<
 	}
 
 	fieldCh <- string(decrypted)
+}
+
+// GetPatronPermissions is the concrete implementation of the interface method which
+// retrieves a patron's permissions from the database.
+// NOTE: at this time, this is a wrapper around the permissions service's function with the same name.
+// It is included here for consistency with the interface.
+func (s *patronService) GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
+
+	return s.permissions.GetPatronPermissions(username)
 }
 
 // UpdatePatronPermissions is the concrete implementation of the interface method which

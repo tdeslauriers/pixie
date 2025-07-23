@@ -286,7 +286,7 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) (*url.URL, error) {
 	// generate a presigned put URL for the image file in object storage
 	putUrl, err := s.store.GetPreSignedPutUrl(r.ObjectKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get presigned put URL for image object key '%s': %v", imageRecord.ObjectKey, err)
+		return nil, fmt.Errorf("failed to get presigned put URL for image object key '%s': %v", r.ObjectKey, err)
 	}
 	return putUrl, nil
 }

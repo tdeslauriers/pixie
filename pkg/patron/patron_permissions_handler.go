@@ -9,6 +9,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
+	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
 )
 
@@ -56,6 +57,8 @@ type permissionHandler struct {
 func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
+	case http.MethodGet:
+		h.getPatronPermissions(w, r)
 	case http.MethodPost:
 		h.updatePatronPermissions(w, r)
 		return
@@ -64,6 +67,72 @@ func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Req
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusMethodNotAllowed,
 			Message:    fmt.Sprintf("unsupported method %s for patrons permissions handler", r.Method),
+		}
+		e.SendJsonErr(w)
+		return
+	}
+}
+
+// getPatronPermissions retrieves a patron's permissions from the database.
+func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.Request) {
+
+	// validate the s2s token
+	s2sToken := r.Header.Get("Service-Authorization")
+	if _, err := h.s2sVerifier.BuildAuthorized(readPatronPermissionsAllowed, s2sToken); err != nil {
+		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify service token: %v", err))
+		connect.RespondAuthFailure(connect.S2s, err, w)
+		return
+	}
+
+	// validate the iam token
+	iamToken := r.Header.Get("Authorization")
+	if _, err := h.iamVerifier.BuildAuthorized(readPatronPermissionsAllowed, iamToken); err != nil {
+		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify iam token: %v", err))
+		connect.RespondAuthFailure(connect.User, err, w)
+		return
+	}
+
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		h.logger.Error("username query parameter is required")
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    "username query parameter is required",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// validate the username
+	if err := validate.IsValidEmail(username); err != nil {
+		h.logger.Error(fmt.Sprintf("invalid username '%s': %v", username, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    fmt.Sprintf("invalid username '%s': %v", username, err),
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// get the patron's permissions
+	_, ps, err := h.service.GetPatronPermissions(username)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("failed to retrieve permissions for patron '%s': %v", username, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    fmt.Sprintf("failed to retrieve permissions for patron '%s': %v", username, err),
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// respond with the permissions
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(ps); err != nil {
+		h.logger.Error(fmt.Sprintf("failed to encode permissions for patron '%s': %v", username, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    fmt.Sprintf("failed to encode permissions for patron '%s': %v", username, err),
 		}
 		e.SendJsonErr(w)
 		return
