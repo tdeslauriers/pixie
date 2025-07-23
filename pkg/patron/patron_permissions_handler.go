@@ -59,6 +59,7 @@ func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Req
 	switch r.Method {
 	case http.MethodGet:
 		h.getPatronPermissions(w, r)
+		return
 	case http.MethodPost:
 		h.updatePatronPermissions(w, r)
 		return

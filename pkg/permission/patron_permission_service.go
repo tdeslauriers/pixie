@@ -85,9 +85,10 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 		return nil, nil, err
 	}
 
+	// It is possible for patrons to have zero permissions.
+	// This will be the default case, so we return an empty map and slice.
 	if len(records) == 0 {
-		s.logger.Info(fmt.Sprintf("no permissions found for patron '%s'", username))
-		return nil, nil, fmt.Errorf("no permissions found for patron '%s'", username)
+		s.logger.Warn(fmt.Sprintf("no permissions found for patron '%s'", username))
 	}
 
 	// decrypt and create a map of permissions

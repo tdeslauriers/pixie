@@ -84,7 +84,7 @@ func (s *patronService) GetByUsername(username string) (*Patron, error) {
 			u.updated_at,
 			u.is_archived,
 			u.is_active
-		FROM patrons u
+		FROM patron u
 		WHERE u.user_index = ?`
 	var record PatronRecord
 	if err := s.sql.SelectRecord(qry, &record, index); err != nil {
