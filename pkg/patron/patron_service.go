@@ -1,6 +1,7 @@
 package patron
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -93,7 +94,11 @@ func (s *patronService) GetByUsername(username string) (*Patron, error) {
 		WHERE u.user_index = ?`
 	var record PatronRecord
 	if err := s.sql.SelectRecord(qry, &record, index); err != nil {
-		return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", err)
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("patron with username '%s' not found", username)
+		} else {
+			return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", err)
+		}
 	}
 
 	// decrypt the patron's username and slug

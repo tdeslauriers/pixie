@@ -89,13 +89,17 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 	// check if the patron already exists
 	existing, err := h.service.GetByUsername(strings.TrimSpace(cmd.Username))
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to check if patron already exists: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    fmt.Sprintf("failed to check if patron already exists: %v", err),
+		if strings.Contains(err.Error(), "not found") {
+			h.logger.Info(fmt.Sprintf("patron with username '%s' does not exist, proceeding with registration", cmd.Username))
+		} else {
+			h.logger.Error(fmt.Sprintf("failed to check if patron already exists: %v", err))
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusInternalServerError,
+				Message:    fmt.Sprintf("failed to check if patron already exists: %v", err),
+			}
+			e.SendJsonErr(w)
+			return
 		}
-		e.SendJsonErr(w)
-		return
 	}
 
 	if existing != nil {
