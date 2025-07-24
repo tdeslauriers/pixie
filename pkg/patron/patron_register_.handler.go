@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
@@ -80,6 +81,28 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    fmt.Sprintf("patron registration command validation failed: %v", err),
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// check if the patron already exists
+	existing, err := h.service.GetByUsername(strings.TrimSpace(cmd.Username))
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("failed to check if patron already exists: %v", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    fmt.Sprintf("failed to check if patron already exists: %v", err),
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	if existing != nil {
+		h.logger.Error(fmt.Sprintf("patron with username '%s' already exists", cmd.Username))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusConflict,
+			Message:    fmt.Sprintf("patron with username '%s' already exists", cmd.Username),
 		}
 		e.SendJsonErr(w)
 		return
