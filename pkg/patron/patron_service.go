@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -19,6 +21,9 @@ type PatronService interface {
 	// GetByUsername retrieves a patron record by username from the database and
 	// performs necessary decryption.
 	GetByUsername(username string) (*Patron, error)
+
+	// CreatePatron creates a new patron record in the database.
+	CreatePatron(string) (*Patron, error)
 
 	// GetPatronPermissions retrieves a patron's permissions from the database.
 	// NOTE: at this time, this is a wrapper around the permissions service's function with the same name.
@@ -170,6 +175,103 @@ func (s *patronService) decryptField(fieldname, fieldvalue string, fieldCh chan<
 	}
 
 	fieldCh <- string(decrypted)
+}
+
+// CreatePatron is the concrete implementation of the interface method which
+// creates a new patron record in the database.
+func (s *patronService) CreatePatron(username string) (*Patron, error) {
+
+	// validate the username
+	// redundant check, but good practice
+	if err := validate.IsValidEmail(username); err != nil {
+		return nil, fmt.Errorf("invalid username '%s': %v", username, err)
+	}
+
+	// create the patron record
+	// no need for concurrency since this is invisible to users
+	// and will not be called frequently
+
+	// generate the patrons uuid
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate uuid for patron: %v", err)
+	}
+
+	// encrypt user name
+	encryptedUsername, err := s.cryptor.EncryptServiceData([]byte(username))
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt username '%s': %v", username, err)
+	}
+
+	// generate the user's blind index
+	userIndex, err := s.indexer.ObtainBlindIndex(username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain blind index for username '%s': %v", username, err)
+	}
+
+	// generate the slug
+	slug, err := uuid.NewRandom()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate slug for patron: %v", err)
+	}
+
+	// encrypt the slug
+	encryptedSlug, err := s.cryptor.EncryptServiceData([]byte(slug.String()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt slug '%s': %v", slug, err)
+	}
+
+	// generate the slug index
+	slugIndex, err := s.indexer.ObtainBlindIndex(slug.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain blind index for slug '%s': %v", slug, err)
+	}
+
+	now := data.CustomTime{Time: time.Now().UTC()}
+
+	record := &PatronRecord{
+		Id:         id.String(),
+		Username:   string(encryptedUsername),
+		UserIndex:  userIndex,
+		Slug:       string(encryptedSlug),
+		SlugIndex:  slugIndex,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		IsArchived: false,
+		IsActive:   true,
+	}
+
+	// insert the patron record into the database
+	qry := `
+		INSERT INTO patron (
+			uuid,
+			username,
+			user_index,
+			slug,
+			slug_index,
+			created_at,
+			updated_at,
+			is_archived,
+			is_active
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?
+		)`
+	if err := s.sql.InsertRecord(qry, *record); err != nil {
+		return nil, fmt.Errorf("failed to insert patron record into database: %v", err)
+	}
+
+	s.logger.Info(fmt.Sprintf("created patron '%s' in the database", record.Id))
+
+	// return the patron record
+	return &Patron{
+		Id:         record.Id,
+		Username:   username,
+		Slug:       slug.String(),
+		CreatedAt:  record.CreatedAt,
+		UpdatedAt:  record.UpdatedAt,
+		IsArchived: record.IsArchived,
+		IsActive:   record.IsActive,
+	}, nil
 }
 
 // GetPatronPermissions is the concrete implementation of the interface method which

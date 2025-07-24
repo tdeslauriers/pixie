@@ -13,11 +13,13 @@ const (
 	// component keys
 	ComponentKey = "component"
 
-	ComponentMain        = "main"
-	ComponentImage       = "image"
-	ComponentGallery     = "gallery"
-	ComponentPermissions = "permissions"
-	ComponentPatron      = "patron"
+	ComponentMain              = "main"
+	ComponentImage             = "image"
+	ComponentGallery           = "gallery"
+	ComponentPermissions       = "permissions"
+	ComponentPatron            = "patron"
+	ComponentPatronPermissions = "patron permissions"
+	ComponentPatronRegister    = "patron register"
 
 	// service keys
 	ServiceKey = "service"

@@ -215,6 +215,9 @@ func (g *gallery) Run() error {
 	pat := patron.NewHandler(g.patrons, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/patrons/permissions", pat.HandlePermissions) // retrieves users permissions and handles updates to patron permissions
 
+	// s2s patron registration -> happens at time of registration, there will be no iam token
+	mux.HandleFunc("/s2s/patrons/register", pat.HandleRegister) // handles patron registration -> ghost profile creation
+
 	// permissions handler
 	perm := permission.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/permissions", perm.HandlePermissions)
