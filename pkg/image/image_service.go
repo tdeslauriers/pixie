@@ -19,6 +19,9 @@ type Service interface {
 	// GetImageData retrieves image data from the database along with a signed URL for the image.
 	GetImageData(slug string) (*ImageData, error)
 
+	// UpdateImageData updates an existing image record in the database.
+	UpdateImageData(existing *ImageData, updated *ImageRecord) error
+
 	// BuildPlaceholder builds the metadata for a placeholder image record.
 	// eg, the id, slug, title, and description provided by the user.
 	// Once meta data persisted, a presigned put url is generated and returned.
@@ -100,16 +103,16 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 		errCh = make(chan error, 6) // to capture any errors from decryption
 	)
 	wg.Add(5)
-	go s.decrypt(record.Title, titleCh, errCh, &wg)
-	go s.decrypt(record.Description, descCh, errCh, &wg)
-	go s.decrypt(record.FileName, fnCh, errCh, &wg)
-	go s.decrypt(record.ObjectKey, okCh, errCh, &wg)
-	go s.decrypt(record.Slug, slugCh, errCh, &wg)
+	go s.decrypt(record.Title, "title", titleCh, errCh, &wg)
+	go s.decrypt(record.Description, "description", descCh, errCh, &wg)
+	go s.decrypt(record.FileName, "filename", fnCh, errCh, &wg)
+	go s.decrypt(record.ObjectKey, "object key", okCh, errCh, &wg)
+	go s.decrypt(record.Slug, "slug", slugCh, errCh, &wg)
 
 	// may not exist yet or may have been an error in processing pipeline reading exif data
 	if record.ImageDate != "" {
 		wg.Add(1)
-		go s.decrypt(record.ImageDate, IdCh, errCh, &wg)
+		go s.decrypt(record.ImageDate, "image date", IdCh, errCh, &wg)
 	}
 
 	// wait for all goroutines to finish
@@ -200,11 +203,11 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) (*url.URL, error) {
 	)
 
 	wg.Add(5)
-	go s.encrypt(r.Title, titleCh, errCh, &wg)
-	go s.encrypt(r.Description, descCh, errCh, &wg)
-	go s.encrypt(r.FileName, fnCh, errCh, &wg)
-	go s.encrypt(r.ObjectKey, okCh, errCh, &wg)
-	go s.encrypt(r.Slug, slugCh, errCh, &wg)
+	go s.encrypt(r.Title, "title", titleCh, errCh, &wg)
+	go s.encrypt(r.Description, "description", descCh, errCh, &wg)
+	go s.encrypt(r.FileName, "file name", fnCh, errCh, &wg)
+	go s.encrypt(r.ObjectKey, "object key", okCh, errCh, &wg)
+	go s.encrypt(r.Slug, "slug", slugCh, errCh, &wg)
 
 	wg.Add(1)
 	go func() {
@@ -291,15 +294,103 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) (*url.URL, error) {
 	return putUrl, nil
 }
 
+// UpdateImageData is the concrete implementation of the interface method which
+// updates an existing image record in the database.
+// NOTE: the only reason existing is passed is so that we check if the ojbectstore needs to be updated
+// due to a new ojbect key being generated.
+func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord) error {
+
+	// validate updated image record
+	// redundant check, but good practice
+	if err := updated.Validate(); err != nil {
+		return fmt.Errorf("failed to validate updated image record: %v", err)
+	}
+
+	// get the blind index for the slug
+	// using existing slug since this should not be updated generally..
+	// if it needs to be updated, the slug should be specifically changed by a separate method.
+	index, err := s.indexer.ObtainBlindIndex(existing.Slug)
+	if err != nil {
+		return fmt.Errorf("failed to generate blind index for slug '%s': %v", updated.Slug, err)
+	}
+
+	// encrypt the sensitive fields in the updated image record
+	var (
+		wg        sync.WaitGroup
+		titleCh   = make(chan string, 1)
+		descCh    = make(chan string, 1)
+		imgDateCh = make(chan string, 1) // image date is encrypted to prevent leakage of sensitive information due to low numbers of images in certain years.
+		objKeyCh  = make(chan string, 1) // object key may have changed if the image was unpublished or if the upload pipeline failed.
+		errCh     = make(chan error, 4)  // to capture any errors from encryption
+	)
+
+	wg.Add(3)
+	go s.encrypt(updated.Title, "title", titleCh, errCh, &wg)
+	go s.encrypt(updated.Description, "description", descCh, errCh, &wg)
+	go s.encrypt(updated.ImageDate, "image date", imgDateCh, errCh, &wg)
+
+	// if object key has changed, we need to encrypt it as well
+	if updated.ObjectKey != existing.ObjectKey {
+		wg.Add(1)
+		go s.encrypt(updated.ObjectKey, "object key", objKeyCh, errCh, &wg)
+	}
+
+	// wait for all goroutines to finish
+	wg.Wait()
+	close(titleCh)
+	close(descCh)
+	close(imgDateCh)
+	if updated.ObjectKey != existing.ObjectKey {
+		close(objKeyCh)
+	}
+	close(errCh)
+
+	// check for any errors during encryption
+	if len(errCh) > 0 {
+		errs := make([]string, 0, len(errCh)+1)
+		for err := range errCh {
+			errs = append(errs, err.Error())
+		}
+		return fmt.Errorf("failed to encrypt image fields: %s", strings.Join(errs, "; "))
+	}
+
+	// update the image record in the database
+	// NOTE: more fields can be added here as needed
+	qry := `
+		UPDATE image SET
+			title = ?,
+			description = ?,
+			object_key = ?,
+			image_date = ?,
+			updated_at = ?,
+			is_archived = ?,
+			is_published = ?
+		WHERE slug_index = ?`
+	if err := s.sql.UpdateRecord(qry, <-titleCh, <-descCh, <-objKeyCh, <-imgDateCh, updated.UpdatedAt, updated.IsArchived, updated.IsPublished, index); err != nil {
+		return fmt.Errorf("failed to update image record in database: %v", err)
+	}
+
+	// if the object key has changed, we need to update the object storage service
+	if updated.ObjectKey != existing.ObjectKey {
+		if err := s.store.MoveObject(existing.ObjectKey, updated.ObjectKey); err != nil {
+			return fmt.Errorf("failed to move image from '%s' to '%s' in object storage: %v", existing.ObjectKey, updated.ObjectKey, err)
+
+		}
+	}
+
+	s.logger.Info(fmt.Sprintf("image slug '%s' moved in object storage from '%s' to '%s'", updated.Slug))
+	return nil
+}
+
 // encrypt is a helper function that encrypts the sensitive fields for the image service.
 // mostly it exists so the code looks cleaner and more readable.
-func (s *imageService) encrypt(plaintext string, encCh chan string, errCh chan error, wg *sync.WaitGroup) {
+func (s *imageService) encrypt(plaintext, fieldname string, encCh chan string, errCh chan error, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	// encrypt the plaintext
 	ciphertext, err := s.cryptor.EncryptServiceData([]byte(plaintext))
 	if err != nil {
-		s.logger.Error(fmt.Sprintf("failed to encrypt plaintext '%s': %v", plaintext, err))
+		s.logger.Error(fmt.Sprintf("failed to encryp %s '%s': %v", fieldname, plaintext, err))
 		errCh <- err
 		return
 	}
@@ -308,14 +399,15 @@ func (s *imageService) encrypt(plaintext string, encCh chan string, errCh chan e
 	encCh <- ciphertext
 }
 
-func (s *imageService) decrypt(ciphertext string, decCh chan string, errCh chan error, wg *sync.WaitGroup) {
+// decrypt is a helper function that decrypts the sensitive fields for the image service.
+func (s *imageService) decrypt(ciphertext, fieldname string, decCh chan string, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
 	// decrypt the ciphertext
 	plaintext, err := s.cryptor.DecryptServiceData(ciphertext)
 	if err != nil {
-		s.logger.Error(fmt.Sprintf("failed to decrypt ciphertext '%s': %v", ciphertext, err))
+		s.logger.Error(fmt.Sprintf("failed to decrypt %s: %v", fieldname, err))
 		errCh <- err
 		return
 	}

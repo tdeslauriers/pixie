@@ -223,3 +223,62 @@ func (cmd *AddMetaDataCmd) GetExtension() (string, error) {
 	// If not found, return an error
 	return "", fmt.Errorf("unsupported file type: %s", cmd.FileType)
 }
+
+// UpdateMetadataCmd is a model that represents the command to update metadata of an image record.
+type UpdateMetadataCmd struct {
+	Csrf           string `json:"csrf,omitempty"`             // CSRF token for security -> needed by downstream services
+	Slug           string `json:"slug,omitempty"`             // Slug of the image to update, must be a valid UUID
+	Title          string `json:"title,omitempty"`            // Title of the image
+	Description    string `json:"description,omitempty"`      // Description of the image
+	ImageDateMonth int    `json:"image_date_month,omitempty"` // Month of the image date, 1-12
+	ImageDateDay   int    `json:"image_date_day,omitempty"`   // Day of the image date, 1-31
+	ImageDateYear  int    `json:"image_date_year,omitempty"`  // Year of the image date, 4 digits
+	IsPublished    bool   `json:"is_published,omitempty"`     // Indicates if the image is published and visible to users
+	IsArchived     bool   `json:"is_archived,omitempty"`      // Indicates if the image is archived
+
+	// addition fields will be added, albums, permissions, image size, etc.
+
+}
+
+// Validate checks the UpdateMetadataCmd for valid data.
+func (cmd *UpdateMetadataCmd) Validate() error {
+	// validate the csrf token
+	if cmd.Csrf != "" {
+		if !validate.IsValidUuid(cmd.Csrf) {
+			return fmt.Errorf("csrf token must be a valid UUID")
+		}
+	}
+
+	// validate the slug
+	if cmd.Slug != "" && !validate.IsValidUuid(cmd.Slug) {
+		return fmt.Errorf("slug must be a valid UUID")
+	}
+
+	// validate the title
+	if cmd.Title != "" && !validate.MatchesRegex(strings.TrimSpace(cmd.Title), TitleRegex) {
+		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
+	}
+
+	// validate the description
+	if cmd.Description != "" && !validate.MatchesRegex(strings.TrimSpace(cmd.Description), DescriptionRegex) {
+		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
+	}
+
+	// validate the image date
+	if cmd.ImageDateMonth < 1 || cmd.ImageDateMonth > 12 {
+		return fmt.Errorf("image date month must be between 1 and 12")
+	}
+	if cmd.ImageDateDay < 1 || cmd.ImageDateDay > 31 {
+		return fmt.Errorf("image date day must be between 1 and 31")
+	}
+	if cmd.ImageDateYear <= 1826 || cmd.ImageDateYear > 9999 {
+		return fmt.Errorf("image date year must be 4 digits and greater than 1826, the year of the first photograph")
+	}
+
+	// validate that both the archived and published flags are not set to true at the same time
+	if cmd.IsArchived && cmd.IsPublished {
+		return fmt.Errorf("image cannot be both archived and published at the same time")
+	}
+
+	return nil
+}
