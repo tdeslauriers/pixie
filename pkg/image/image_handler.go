@@ -96,6 +96,7 @@ func (h *imageHandler) HandleImage(w http.ResponseWriter, r *http.Request) {
 			Message:    errMsg,
 		}
 		e.SendJsonErr(w)
+		return
 	}
 }
 
@@ -242,30 +243,12 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// build image date from the update data fields
+	// build image date from the update cmd date fields
 	// image data is required, so if any of the fields are empty, validation ^^ will have returned an error
 	imageDate := time.Date(cmd.ImageDateYear, time.Month(cmd.ImageDateMonth), cmd.ImageDateDay, 0, 0, 0, 0, time.UTC)
 
-	// convert the created at time back to CustomTime
-	createdAt, err := time.Parse(time.RFC3339, existing.CreatedAt)
-	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/slug handler failed to parse created at time: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to parse created at time",
-		}
-		e.SendJsonErr(w)
-		return
-	}
-
-	// check for image date and if exists, object key should be changed to reflect the year
-	var objectKey string
-	if imageDate.Year() != 0 {
-		objectKey = fmt.Sprintf("%d/%s", imageDate.Year(), existing.FileName)
-		if existing.ObjectKey != objectKey {
-			h.logger.Warn(fmt.Sprintf("object key for image '%s' changed from '%s' to '%s'", existing.Slug, existing.ObjectKey, objectKey))
-		}
-	}
+	// update the objectKey (note it may not change, but we still need the value for the update cmd)
+	objectKey := fmt.Sprintf("%d/%s", imageDate.Year(), existing.FileName)
 
 	// build image record that are allowed to be updated
 	// Note: more fields can be added here as needed
@@ -278,8 +261,8 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		ObjectKey:   objectKey,         // object key may change if err on upload pipeline => unpublished image
 		Slug:        existing.Slug,     // slug should not change
 		Size:        existing.Size,
-		ImageDate:   imageDate.Format(time.RFC3339),   // format the image date as RFC3339
-		CreatedAt:   data.CustomTime{Time: createdAt}, // created at should not change
+		ImageDate:   imageDate.Format(time.RFC3339), // format the image date as RFC3339
+		// created_at will not change, and will not be included in the updated fields:  leave default value.
 		UpdatedAt:   data.CustomTime{Time: time.Now().UTC()},
 		IsArchived:  cmd.IsArchived,
 		IsPublished: cmd.IsPublished,
@@ -302,23 +285,27 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 
 	// audit log
 	if existing.Title != updated.Title {
-		h.logger.Info(fmt.Sprintf("image '%s' title updated from '%s' to '%s' by %s", existing.Slug, existing.Title, updated.Title, authorized.Claims.Email))
+		h.logger.Info(fmt.Sprintf("image slug '%s' title updated from '%s' to '%s' by %s", existing.Slug, existing.Title, updated.Title, authorized.Claims.Subject))
 	}
 
 	if existing.Description != updated.Description {
-		h.logger.Info(fmt.Sprintf("image '%s' description updated from '%s' to '%s' by %s", existing.Slug, existing.Description, updated.Description, authorized.Claims.Email))
+		h.logger.Info(fmt.Sprintf("image  slug  '%s' description updated from '%s' to '%s' by %s", existing.Slug, existing.Description, updated.Description, authorized.Claims.Subject))
 	}
 
 	if existing.ImageDate != updated.ImageDate {
-		h.logger.Info(fmt.Sprintf("image '%s' date updated from '%s' to '%s' by %s", existing.Slug, existing.ImageDate, updated.ImageDate, authorized.Claims.Email))
+		h.logger.Info(fmt.Sprintf("image slug '%s' date updated from '%s' to '%s' by %s", existing.Slug, existing.ImageDate, updated.ImageDate, authorized.Claims.Subject))
+	}
+
+	if existing.ObjectKey != updated.ObjectKey {
+		h.logger.Info(fmt.Sprintf("image slug '%s' object key updated from '%s' to '%s' by %s", existing.Slug, existing.ObjectKey, updated.ObjectKey, authorized.Claims.Subject))
 	}
 
 	if existing.IsArchived != updated.IsArchived {
-		h.logger.Info(fmt.Sprintf("image '%s' archived status updated from '%t' to '%t' by %s", existing.Slug, existing.IsArchived, updated.IsArchived, authorized.Claims.Email))
+		h.logger.Info(fmt.Sprintf("image slug '%s' archived status updated from '%t' to '%t' by %s", existing.Slug, existing.IsArchived, updated.IsArchived, authorized.Claims.Subject))
 	}
 
 	if existing.IsPublished != updated.IsPublished {
-		h.logger.Info(fmt.Sprintf("image '%s' published status updated from '%t' to '%t' by %s", existing.Slug, existing.IsPublished, updated.IsPublished, authorized.Claims.Email))
+		h.logger.Info(fmt.Sprintf("image slug '%s' published status updated from '%t' to '%t' by %s", existing.Slug, existing.IsPublished, updated.IsPublished, authorized.Claims.Subject))
 	}
 
 	w.WriteHeader(http.StatusNoContent) // 204 No Content

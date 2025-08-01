@@ -306,12 +306,23 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 		return fmt.Errorf("failed to validate updated image record: %v", err)
 	}
 
+	// is update necessary?
+	if existing.Title == updated.Title &&
+		existing.Description == updated.Description &&
+		existing.ImageDate == updated.ImageDate &&
+		existing.ObjectKey == updated.ObjectKey &&
+		existing.IsArchived == updated.IsArchived &&
+		existing.IsPublished == updated.IsPublished {
+		s.logger.Info(fmt.Sprintf("no changes detected for image slug '%s', skipping update", existing.Slug))
+		return nil // no changes, nothing to update
+	}
+
 	// get the blind index for the slug
 	// using existing slug since this should not be updated generally..
 	// if it needs to be updated, the slug should be specifically changed by a separate method.
 	index, err := s.indexer.ObtainBlindIndex(existing.Slug)
 	if err != nil {
-		return fmt.Errorf("failed to generate blind index for slug '%s': %v", updated.Slug, err)
+		return fmt.Errorf("failed to generate blind index for imaage slug '%s': %v", updated.Slug, err)
 	}
 
 	// encrypt the sensitive fields in the updated image record
@@ -324,25 +335,18 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 		errCh     = make(chan error, 4)  // to capture any errors from encryption
 	)
 
-	wg.Add(3)
+	wg.Add(4)
 	go s.encrypt(updated.Title, "title", titleCh, errCh, &wg)
 	go s.encrypt(updated.Description, "description", descCh, errCh, &wg)
 	go s.encrypt(updated.ImageDate, "image date", imgDateCh, errCh, &wg)
-
-	// if object key has changed, we need to encrypt it as well
-	if updated.ObjectKey != existing.ObjectKey {
-		wg.Add(1)
-		go s.encrypt(updated.ObjectKey, "object key", objKeyCh, errCh, &wg)
-	}
+	go s.encrypt(updated.ObjectKey, "object key", objKeyCh, errCh, &wg)
 
 	// wait for all goroutines to finish
 	wg.Wait()
 	close(titleCh)
 	close(descCh)
 	close(imgDateCh)
-	if updated.ObjectKey != existing.ObjectKey {
-		close(objKeyCh)
-	}
+	close(objKeyCh) // need to close this channel even if it was not used
 	close(errCh)
 
 	// check for any errors during encryption
@@ -374,11 +378,10 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 	if updated.ObjectKey != existing.ObjectKey {
 		if err := s.store.MoveObject(existing.ObjectKey, updated.ObjectKey); err != nil {
 			return fmt.Errorf("failed to move image from '%s' to '%s' in object storage: %v", existing.ObjectKey, updated.ObjectKey, err)
-
 		}
+		s.logger.Info(fmt.Sprintf("image slug '%s' moved in object storage from '%s' to '%s'", updated.Slug, existing.ObjectKey, updated.ObjectKey))
 	}
 
-	s.logger.Info(fmt.Sprintf("image slug '%s' moved in object storage from '%s' to '%s'", updated.Slug))
 	return nil
 }
 

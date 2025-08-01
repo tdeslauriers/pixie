@@ -3,6 +3,7 @@ package image
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -271,8 +272,10 @@ func (cmd *UpdateMetadataCmd) Validate() error {
 	if cmd.ImageDateDay < 1 || cmd.ImageDateDay > 31 {
 		return fmt.Errorf("image date day must be between 1 and 31")
 	}
-	if cmd.ImageDateYear <= 1826 || cmd.ImageDateYear > 9999 {
-		return fmt.Errorf("image date year must be 4 digits and greater than 1826, the year of the first photograph")
+
+	now := time.Now().UTC()
+	if cmd.ImageDateYear <= 1826 || cmd.ImageDateYear > now.Year() {
+		return fmt.Errorf("image date year must be 4 digits and between 1826, the year of the oldest known photograph, and now.")
 	}
 
 	// validate that both the archived and published flags are not set to true at the same time
