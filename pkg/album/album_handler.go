@@ -1,0 +1,149 @@
+package album
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+
+	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/pixie/internal/util"
+)
+
+// scopes required to interact with the album handler(s) endpoints
+var (
+	readAlbumAllowed = []string{"r:pixie:*", "r:pixie:albums:*"}
+	editAlbumAllowed = []string{"w:pixie:*", "w:pixie:albums:*"}
+)
+
+// Handler is an interface that defines methods for handling album-related requests.
+type Handler interface {
+
+	// HandleAlbums handles requests related to albums.
+	HandleAlbums(w http.ResponseWriter, r *http.Request)
+}
+
+// NewHandler creates a new Handler instance and returns a pointer to the concrete implementation.
+func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
+	return &handler{
+		service: s,
+		s2s:     s2s,
+		iam:     iam,
+
+		logger: slog.Default().
+			With(slog.String(util.ServiceKey, util.ServiceGallery)).
+			With(slog.String(util.ComponentKey, util.ComponentAlbumHandler)).
+			With(slog.String(util.PackageKey, util.PackageAlbum)),
+	}
+}
+
+var _ Handler = (*handler)(nil)
+
+// handler is the concrete implementation of the Handler interface.
+type handler struct {
+	service Service
+	s2s     jwt.Verifier
+	iam     jwt.Verifier // inherently nil because this will come from registration -> s2s
+
+	logger *slog.Logger
+}
+
+// HandleAlbums is the concrete implementation of the interface method which handles album-related requests.
+// It will handle the request logic, including validation and persistence of album records.
+func (h *handler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
+
+	switch r.Method {
+	case http.MethodGet:
+		// h.handleGetAlbums(w, r)
+		// return
+	case http.MethodPost:
+		h.handleCreateAlbum(w, r)
+		return
+	default:
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusMethodNotAllowed,
+			Message:    "Method not allowed",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+}
+
+// handleCreateAlbum handles the creation of a new album record.
+func (h *handler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
+
+	// validate service token
+	s2sToken := r.Header.Get("Service-Authorization")
+	if _, err := h.s2s.BuildAuthorized(editAlbumAllowed, s2sToken); err != nil {
+		connect.RespondAuthFailure(connect.S2s, err, w)
+		return
+	}
+
+	// validate iam token
+	iamToken := r.Header.Get("Authorization")
+	authorized, err := h.iam.BuildAuthorized(editAlbumAllowed, iamToken)
+	if err != nil {
+		connect.RespondAuthFailure(connect.User, err, w)
+		return
+	}
+
+	// decode the request body into an cmd record
+	var cmd AddAlbumCmd
+	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		h.logger.Error("Failed to decode album record", slog.Any("error", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    "Failed to decode album record",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// validate the album record
+	if err := cmd.Validate(); err != nil {
+		h.logger.Error("Album record validation failed", slog.Any("error", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusUnprocessableEntity,
+			Message:    "Album record validation failed",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// build the album record with the fields in the add command
+	record := &AlbumRecord{
+		Title:       cmd.Title,
+		Description: cmd.Description,
+		IsArchived:  cmd.IsArchived,
+	}
+
+	// create the album record in the database
+	// which will populate the missing fields
+	created, err := h.service.CreateAlbum(record)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to create album record: %v", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to create album record",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// audit log
+	h.logger.Info(fmt.Sprintf("album record '%s' created by user '%s'", created.Title, authorized.Claims.Subject))
+
+	// respond with the created album record
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(created); err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to encode created album record: %v", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to encode created album record",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+}

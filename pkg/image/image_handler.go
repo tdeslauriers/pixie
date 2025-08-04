@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	readImagesAllowed  = []string{"r:pixie:images:*"}
-	writeImagesAllowed = []string{"w:pixie:images:*"}
+	readImagesAllowed  = []string{"r:pixie:*", "r:pixie:images:*"}
+	writeImagesAllowed = []string{"w:pixie:*", "w:pixie:images:*"}
 )
 
 // Handler is the interface for image processing service handlers.

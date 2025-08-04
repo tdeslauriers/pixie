@@ -18,6 +18,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/sign"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/album"
 	"github.com/tdeslauriers/pixie/pkg/image"
 	"github.com/tdeslauriers/pixie/pkg/patron"
 	"github.com/tdeslauriers/pixie/pkg/permission"
@@ -164,6 +165,7 @@ func New(config *config.Config) (Gallery, error) {
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
+		albums:           album.NewService(repository, indexer, cryptor),
 		images:           image.NewService(repository, indexer, cryptor, objStore),
 		patrons:          patron.NewService(repository, indexer, cryptor),
 		permissions:      permission.NewService(repository, indexer, cryptor),
@@ -186,6 +188,7 @@ type gallery struct {
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
 	identity         connect.S2sCaller
+	albums           album.Service
 	images           image.Service
 	patrons          patron.Service
 	permissions      permission.Service
@@ -206,6 +209,10 @@ func (g *gallery) Run() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
+
+	// album handler
+	albumHandler := album.NewHandler(g.albums, g.s2sVerifier, g.iamVerifier)
+	mux.HandleFunc("/albums", albumHandler.HandleAlbums) // handles album listing and creation
 
 	// image handler
 	img := image.NewHandler(g.images, g.s2sVerifier, g.iamVerifier)

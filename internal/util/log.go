@@ -5,6 +5,7 @@ const (
 	PackageKey = "package"
 
 	PackageMain        = "main"
+	PackageAlbum       = "album"
 	PackageGallery     = "gallery"
 	PackageImage       = "image"
 	PackagePatron      = "patron"
@@ -20,6 +21,8 @@ const (
 	ComponentPatron            = "patron"
 	ComponentPatronPermissions = "patron permissions"
 	ComponentPatronRegister    = "patron register"
+	ComponentAlbumSerivce      = "album service"
+	ComponentAlbumHandler      = "album handler"
 
 	// service keys
 	ServiceKey = "service"

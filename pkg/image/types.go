@@ -256,12 +256,20 @@ func (cmd *UpdateMetadataCmd) Validate() error {
 	}
 
 	// validate the title
-	if cmd.Title != "" && !validate.MatchesRegex(strings.TrimSpace(cmd.Title), TitleRegex) {
+	if cmd.Title == "" {
+		return fmt.Errorf("title is required")
+	}
+
+	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), TitleRegex) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
 	}
 
 	// validate the description
-	if cmd.Description != "" && !validate.MatchesRegex(strings.TrimSpace(cmd.Description), DescriptionRegex) {
+	if cmd.Description == "" {
+		return fmt.Errorf("description is required")
+	}
+
+	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), DescriptionRegex) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
 	}
 
