@@ -103,3 +103,55 @@ func (a *AlbumRecord) Validate() error {
 
 	return nil
 }
+
+// Album is a model which represents an album in the API response.
+type Album struct {
+	Csrf          string          `json:"csrf,omitempty"` // CSRF token, if required, or if present
+	Id            string          `json:"id,omitempty"`
+	Title         string          `json:"title"`
+	Description   string          `json:"description"`
+	Slug          string          `json:"slug,omitempty"`
+	CreatedAt     data.CustomTime `json:"created_at,omitempty"`
+	UpdatedAt     data.CustomTime `json:"updated_at,omitempty"`
+	IsArchived    bool            `json:"is_archived"`
+	CoverImageUrl string          `json:"cover_image_url,omitempty"` // URL to the cover image, if any
+}
+
+// Validate validates the Album -> input validation.
+func (a *Album) Validate() error {
+
+	// if csrf is present, validate it
+	if a.Csrf != "" && !validate.IsValidUuid(a.Csrf) {
+		return fmt.Errorf("invalid CSRF token")
+	}
+
+	// validate id
+	if !validate.IsValidUuid(a.Id) {
+		return fmt.Errorf("invalid album Id: %s", a.Id)
+	}
+
+	// validate title
+	if a.Title == "" {
+		return fmt.Errorf("title is required")
+	}
+
+	if !validate.MatchesRegex(strings.TrimSpace(a.Title), TitleRegex) {
+		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
+	}
+
+	// validate description
+	if a.Description == "" {
+		return fmt.Errorf("description is required")
+	}
+
+	if !validate.MatchesRegex(strings.TrimSpace(a.Description), DescriptionRegex) {
+		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
+	}
+
+	// validate slug
+	if !validate.IsValidUuid(a.Slug) {
+		return fmt.Errorf("invalid slug: %s", a.Slug)
+	}
+
+	return nil
+}

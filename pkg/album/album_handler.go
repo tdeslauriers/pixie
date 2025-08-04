@@ -134,10 +134,22 @@ func (h *handler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 	// audit log
 	h.logger.Info(fmt.Sprintf("album record '%s' created by user '%s'", created.Title, authorized.Claims.Subject))
 
+	// build the response
+	response := Album{
+		Id:          created.Id,
+		Title:       created.Title,
+		Description: created.Description,
+		Slug:        created.Slug,
+		CreatedAt:   created.CreatedAt,
+		UpdatedAt:   created.UpdatedAt,
+		IsArchived:  created.IsArchived,
+		// cover image url omitted since will not exist yet
+	}
+
 	// respond with the created album record
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(created); err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to encode created album record: %v", err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
