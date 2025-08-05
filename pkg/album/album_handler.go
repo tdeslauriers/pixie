@@ -27,9 +27,10 @@ type Handler interface {
 // NewHandler creates a new Handler instance and returns a pointer to the concrete implementation.
 func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
 	return &handler{
-		service: s,
-		s2s:     s2s,
-		iam:     iam,
+		svc: s,
+
+		s2s: s2s,
+		iam: iam,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -42,9 +43,9 @@ var _ Handler = (*handler)(nil)
 
 // handler is the concrete implementation of the Handler interface.
 type handler struct {
-	service Service
-	s2s     jwt.Verifier
-	iam     jwt.Verifier // inherently nil because this will come from registration -> s2s
+	svc Service
+	s2s jwt.Verifier
+	iam jwt.Verifier // inherently nil because this will come from registration -> s2s
 
 	logger *slog.Logger
 }
@@ -55,8 +56,8 @@ func (h *handler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// h.handleGetAlbums(w, r)
-		// return
+		h.handleGetAlbums(w, r)
+		return
 	case http.MethodPost:
 		h.handleCreateAlbum(w, r)
 		return
@@ -64,6 +65,49 @@ func (h *handler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusMethodNotAllowed,
 			Message:    "Method not allowed",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+}
+
+// handleActiveAlbums handles the retrieval of all album records a user has permission to view.
+func (h *handler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
+
+	// validate service token
+	s2sToken := r.Header.Get("Service-Authorization")
+	if _, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken); err != nil {
+		connect.RespondAuthFailure(connect.S2s, err, w)
+		return
+	}
+
+	// validate iam token
+	iamToken := r.Header.Get("Authorization")
+	authorized, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
+	if err != nil {
+		connect.RespondAuthFailure(connect.User, err, w)
+		return
+	}
+
+	albums, err := h.svc.GetAllowedAlbums(authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to retrieve albums for user '%s': %v", authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to retrieve albums",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// send the response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(albums); err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to encode albums for user '%s': %v", authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to encode albums",
 		}
 		e.SendJsonErr(w)
 		return
@@ -111,16 +155,9 @@ func (h *handler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// build the album record with the fields in the add command
-	record := &AlbumRecord{
-		Title:       cmd.Title,
-		Description: cmd.Description,
-		IsArchived:  cmd.IsArchived,
-	}
-
 	// create the album record in the database
 	// which will populate the missing fields
-	created, err := h.service.CreateAlbum(record)
+	created, err := h.svc.CreateAlbum(cmd)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to create album record: %v", err))
 		e := connect.ErrorHttp{

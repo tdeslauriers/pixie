@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 )
 
@@ -154,4 +155,55 @@ func (a *Album) Validate() error {
 	}
 
 	return nil
+}
+
+// buildAlbumPermisssionQuery is a helper function which builds a query to retrieve album records based
+// on the user's permissions.
+// It uses the provided permissions map to create the query params.
+func buildAlbumPermisssionQuery(ps map[string]permissions.PermissionRecord) (string, error) {
+
+	// check for empty permissions map
+	if len(ps) == 0 {
+		return "", fmt.Errorf("permissions map cannot be empty for album query builder")
+	}
+
+	// create album select statement
+	var qb strings.Builder
+	qb.WriteString(`
+		SELECT DISTINCT
+			a.uuid,
+			a.title,
+			a.description,
+			a.slug,
+			a.slug_index,
+			a.created_at,
+			a.updated_at,
+			a.is_archived
+		FROM album a
+			LEFT OUTER JOIN album_image ai ON a.uuid = ai.album_uuid
+			LEFT OUTER JOIN image i ON ai.image_uuid = i.uuid
+			LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid`)
+
+	// create the where clause based on the permissions uuids AS VARIABLES/PARAMS
+	qb.WriteString(`
+		WHERE ip.permission_uuid IN (`)
+	i := 0
+	for range ps {
+		if i > 0 {
+			qb.WriteString(", ")
+		}
+		qb.WriteString("?")
+		i++
+	}
+	qb.WriteString(`)`)
+
+	// check if permissions include 'Gallery Curator'
+	if _, ok := ps["Gallery Curator"]; !ok {
+		// if not, add a condition to filter out albums that are archived
+		qb.WriteString(" AND a.is_archived = FALSE")
+		qb.WriteString(" AND i.is_archived = FALSE")
+		qb.WriteString(" AND i.is_published = TRUE")
+	}
+
+	return qb.String(), nil
 }
