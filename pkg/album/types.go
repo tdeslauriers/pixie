@@ -107,15 +107,15 @@ func (a *AlbumRecord) Validate() error {
 
 // Album is a model which represents an album in the API response.
 type Album struct {
-	Csrf          string          `json:"csrf,omitempty"` // CSRF token, if required, or if present
-	Id            string          `json:"id,omitempty"`
-	Title         string          `json:"title"`
-	Description   string          `json:"description"`
-	Slug          string          `json:"slug,omitempty"`
-	CreatedAt     data.CustomTime `json:"created_at,omitempty"`
-	UpdatedAt     data.CustomTime `json:"updated_at,omitempty"`
-	IsArchived    bool            `json:"is_archived"`
-	CoverImageUrl string          `json:"cover_image_url,omitempty"` // URL to the cover image, if any
+	Csrf        string          `json:"csrf,omitempty"` // CSRF token, if required, or if present
+	Id          string          `json:"id,omitempty"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Slug        string          `json:"slug,omitempty"`
+	CreatedAt   data.CustomTime `json:"created_at,omitempty"`
+	UpdatedAt   data.CustomTime `json:"updated_at,omitempty"`
+	IsArchived  bool            `json:"is_archived"`
+	SignedUrl   string          `json:"signed_url,omitempty"` // URL to the cover image, if any
 }
 
 // Validate validates the Album -> input validation.
