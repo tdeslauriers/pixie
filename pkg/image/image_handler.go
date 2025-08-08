@@ -357,73 +357,8 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 	}
 
 	// build placeholder image record waiting for the image file to be processed on
-	// notification from the object storage service
-	id, err := uuid.NewRandom()
-	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/ handler failed to generate new image record id: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to generate new image record id",
-		}
-		e.SendJsonErr(w)
-		return
-	}
-
-	// create the slug (which is a unique identifier shared as the filename in object storage)
-	slug, err := uuid.NewRandom()
-	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/ handler failed to generate new image slug: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to generate new image slug",
-		}
-		e.SendJsonErr(w)
-		return
-	}
-
-	// get file type from the command --> extension
-	ext, err := cmd.GetExtension()
-	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/ handler failed to get file extension from command: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusUnprocessableEntity,
-			Message:    fmt.Sprintf("failed to get file extension from command: %v", err),
-		}
-		e.SendJsonErr(w)
-		return
-	}
-
-	// build the filename for the image file
-	// this should not change even if the namespace changes in the object storage service
-	fileName := fmt.Sprintf("%s.%s", slug.String(), ext)
-
-	// build the object key for the image file in object storage
-	objectKey := fmt.Sprintf("uploads/%s", fileName)
-
-	now := time.Now().UTC()
-
-	// incomplete/stubbed image record missing fields that will be filled in later
-	// when the image file is processed and the object storage service notifies the image service
-	imageRecord := ImageRecord{
-		Id:          id.String(),
-		Title:       strings.TrimSpace(cmd.Title),
-		Description: strings.TrimSpace(cmd.Description),
-		FileName:    fileName,
-		FileType:    strings.TrimSpace(cmd.FileType),
-		ObjectKey:   objectKey,
-		Slug:        slug.String(),
-		Size:        cmd.Size,
-		Width:       0, // default to 0 until image is processed
-		Height:      0, // default to 0 until image is processed
-		CreatedAt:   data.CustomTime{Time: now},
-		UpdatedAt:   data.CustomTime{Time: now}, // updated at is the same as created at for a new record
-		IsArchived:  false,                      // default to not archived
-		IsPublished: false,                      // default to not published --> image prcessing pipeline will publish the image when processing is complete
-	}
-
-	// persist the image record in the database and
 	// generate a pre-signed PUT URL to return for browser to submit the file to object storage
-	putUrl, err := h.svc.BuildPlaceholder(&imageRecord)
+	placeholder, err := h.svc.BuildPlaceholder(cmd)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("/images handler failed to build placeholder image record: %v", err))
 		e := connect.ErrorHttp{
@@ -437,27 +372,11 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 	// TODO: add the pre-added album mappings from the upload command. --> may also included adding album record.
 	// TODO: add the pre-added permissions tags from the upload command.
 
-	// build reponse data to return to the client
-	responseData := ImageData{
-		Id:          imageRecord.Id,
-		Title:       imageRecord.Title,
-		Description: imageRecord.Description,
-		FileName:    imageRecord.FileName,
-		FileType:    imageRecord.FileType,
-		ObjectKey:   imageRecord.ObjectKey, // this is the "uploads/slug.jpg" key in object storage -> staging
-		Slug:        imageRecord.Slug,
-		Size:        imageRecord.Size,
-		CreatedAt:   imageRecord.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   imageRecord.UpdatedAt.Format(time.RFC3339), // format the time as RFC3339
-		IsArchived:  imageRecord.IsArchived,
-		IsPublished: imageRecord.IsPublished,
-		SignedUrl:   putUrl.String(), // the pre-signed PUT URL for the browser to upload the image file into object storage
-	}
 
 	h.logger.Info(fmt.Sprintf("/images/ handler successfully created placeholder image record with id %s", imageRecord.Id))
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(responseData); err != nil {
+	if err := json.NewEncoder(w).Encode(placeholder); err != nil {
 		h.logger.Error(fmt.Sprintf("/images/ handler failed to encode placeholder image data: %v", err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,

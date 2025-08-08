@@ -10,8 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
+	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/image"
 	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
@@ -21,6 +23,11 @@ type Service interface {
 	// GetAllowedAlbums returns a list of albums that the user is allowed to view based on their permissions.
 	GetAllowedAlbums(username string) ([]AlbumRecord, error)
 
+	// GetAlbum returns a specific album record by its slug, and
+	// a slice of the thumbnail images for the album.
+	// Note: username is required to check permissions for each of the album's associated images.
+	GetAlbumBySlug(slug, username string) (*Album, error)
+
 	// CreateAlbum creates a new album record in the database, ecrypots sensitive fields, and
 	// returns a pointer to the created album record,
 	// or returns an error if the creation fails.
@@ -28,12 +35,13 @@ type Service interface {
 }
 
 // NewService creates a new album service and provides a pointer to a concrete implementation.
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Service {
+func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, o storage.ObjectStorage) Service {
 	return &service{
 		sql:     sql,
 		indexer: i,
-		cryptor: c,
+		cryptor: NewCryptor(c),
 		perms:   permission.NewService(sql, i, c),
+		store:   o,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -48,8 +56,9 @@ var _ Service = (*service)(nil)
 type service struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
-	cryptor data.Cryptor
+	cryptor Cryptor // album data specific wrapper around data.Cryptor
 	perms   permission.Service
+	store   storage.ObjectStorage
 
 	logger *slog.Logger
 }
@@ -73,7 +82,7 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 	}
 
 	// build album query based on permissions
-	qry, err := buildAlbumPermisssionQuery(psMap)
+	qry, err := buildAlbumSQuery(psMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build album permission query: %v", err)
 	}
@@ -101,9 +110,11 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 		wg.Add(1)
 		go func(a *AlbumRecord) {
 			defer wg.Done()
-			if err := s.decryptAlbumRecord(a); err != nil {
+			if err := s.cryptor.DecryptAlbumRecord(a); err != nil {
 				errCh <- fmt.Errorf("failed to decrypt album record '%s': %v", a.Id, err)
 			}
+			// also need to remove the blind index from the album record
+			a.SlugIndex = ""
 		}(&albums[i])
 	}
 
@@ -122,6 +133,171 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 	}
 
 	return albums, nil
+}
+
+// GetAlbumBySlug implements the Service interface method to retrieve a specific album record by its slug.
+// It also retrieves a slice of the thumbnail images for the album.
+func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
+
+	// vadidate the slug and the username
+	// redundant check, but good practice
+	if !validate.IsValidUuid(slug) {
+		return nil, fmt.Errorf("invalid album slug: %s", slug)
+	}
+
+	if err := validate.IsValidEmail(username); err != nil {
+		return nil, fmt.Errorf("invalid username: %v", err)
+	}
+
+	// get album index
+	slugIndex, err := s.indexer.ObtainBlindIndex(slug)
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain blind index for album slug '%s': %v", slug, err)
+	}
+
+	// get the user's permissions
+	psMap, _, err := s.perms.GetPatronPermissions(username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve permissions for user '%s': %v", username, err)
+	}
+
+	// build the album query
+	qry, err := buildAlbumImagesQuery(psMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create query for album slug %s", slug)
+	}
+
+	// convert the permissions map into a variatic slice of interface{}, ie args ...interface{}
+	args := make([]interface{}, 0, len(psMap)+1) // capacity needs to include the slug index
+	args = append(args, slugIndex)               // index in first args position
+	for _, p := range psMap {
+		args = append(args, p.Id)
+	}
+
+	var records []AlbumImageRecord
+	if err := s.sql.SelectRecords(qry, &records, args...); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("failed to find images user '%s' has permission to view in this album", username)
+		} else {
+			return nil, fmt.Errorf("failed to retrieve album slug %s from database for user '%s'", slug, username)
+		}
+	}
+
+	// seocondary check to ensure we have records
+	if len(records) == 0 {
+		return nil, fmt.Errorf("no images found for album slug %s and user %s's permissions level(s)", slug)
+	}
+
+	// build the album modelfrom the first record
+	album := &Album{
+		Id:          records[0].AlbumId,
+		Title:       records[0].AlbumTitle,
+		Description: records[0].AlbumDescription,
+		Slug:        records[0].AlbumSlug,
+		CreatedAt:   records[0].AlbumCreatedAt,
+		UpdatedAt:   records[0].AlbumUpdatedAt,
+		IsArchived:  records[0].AlbumIsArchived,
+		// Images slice will be populated below after additional operations
+	}
+
+	// decrypt the album record
+	if err := s.cryptor.DecryptAlbum(album); err != nil {
+		return nil, fmt.Errorf("failed to decrypt album record '%s': %v", album.Id, err)
+	}
+
+	// build the images slice from the records
+	// includes decryption of sensitive fields and
+	// getting presigned links to the image thumbnails
+	images, err := s.buildImageData(records)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build image data for album slug %s: %v", slug, err)
+	}
+
+	// set the images slice on the album
+	album.Images = images
+
+	return album, nil
+}
+
+// buildImageData takes the fields from a AlbumImageRecords and builds an slice of decrypted ImageData structs
+// with presigned URLs for the thumbnail images.
+func (s *service) buildImageData(records []AlbumImageRecord) ([]image.ImageData, error) {
+
+	// chack that records slice is not empty
+	if len(records) == 0 {
+		return []image.ImageData{}, nil
+	}
+
+	// build the image data slice
+	images := make([]image.ImageData, len(records))
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(records))
+
+	for i, r := range records {
+		wg.Add(1)
+		go func(i int, r AlbumImageRecord) {
+			defer wg.Done()
+
+			// build the image data struct
+			img := &image.ImageData{
+				Id:          r.ImageId,
+				Title:       r.ImageTitle,
+				Description: r.ImageDescription,
+				FileName:    r.FileName,
+				ObjectKey:   r.ObjectKey,
+				Slug:        r.ImageSlug,
+				ImageDate:   r.ImageDate,
+				CreatedAt:   r.ImageCreatedAt.Format(time.RFC3339),
+				UpdatedAt:   r.ImageUpdatedAt.Format(time.RFC3339),
+				IsArchived:  r.ImageIsArchived,
+				IsPublished: r.ImageIsPublished,
+			}
+
+			// decrypt the sensitive fields in the image data
+			if err := s.cryptor.DecryptImageData(img); err != nil {
+				errCh <- fmt.Errorf("failed to decrypt image data '%s': %v", img.Id, err)
+				return
+			}
+
+			// get a presigned URL for the thumbnail image
+			url, err := s.store.GetSignedUrl(fmt.Sprintf("%s_thumbnail", img.ObjectKey))
+			if err != nil {
+				errCh <- fmt.Errorf("failed to get presigned URL for image '%s', filename '%s' record's thumbnail: %v", img.Id, img.FileName, err)
+				return
+			}
+
+			// if the url is empty, log an error and continue
+			if url == nil || url.String() == "" {
+				errCh <- fmt.Errorf("presigned URL for image '%s', filname '%s' record's thumbnail is empty", img.Id, img.FileName)
+				return
+			}
+
+			// set the signed thumbnail URL in the image data
+			img.SignedUrl = url.String()
+
+			// set the image data in the slice
+			images[i] = *img
+
+		}(i, r)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// check for errors during decryption and URL generation
+	if len(errCh) > 0 {
+		var errs []error
+		for e := range errCh {
+			errs = append(errs, e)
+		}
+		if len(errs) > 0 {
+			return nil, fmt.Errorf("failed to build image data for album: %v", errors.Join(errs...))
+		}
+	}
+
+	// return the images slice
+	return images, nil
 }
 
 // CreateAlbum implements the Service interface method to create a new album record in the database.
@@ -168,7 +344,7 @@ func (s *service) CreateAlbum(cmd AddAlbumCmd) (*AlbumRecord, error) {
 		IsArchived:  cmd.IsArchived,
 	}
 	// encrypt the sensitive fields in the album record
-	if err := s.encryptAlbumRecord(album); err != nil {
+	if err := s.cryptor.EncryptAlbumRecord(album); err != nil {
 		return nil, err
 	}
 
@@ -198,137 +374,4 @@ func (s *service) CreateAlbum(cmd AddAlbumCmd) (*AlbumRecord, error) {
 	album.Slug = slug.String()
 
 	return album, nil
-}
-
-// EncryptAlbum Record encrypts the sensitive fields in the album record.
-func (s *service) encryptAlbumRecord(album *AlbumRecord) error {
-
-	if album == nil {
-		return fmt.Errorf("album record cannot be nil")
-	}
-
-	var (
-		wg            sync.WaitGroup
-		titleCh       = make(chan string, 1)
-		descriptionCh = make(chan string, 1)
-		slugCh        = make(chan string, 1)
-		errCh         = make(chan error, 3)
-	)
-
-	wg.Add(3)
-	go s.encrypt("album title", album.Title, titleCh, errCh, &wg)
-	go s.encrypt("album description", album.Description, descriptionCh, errCh, &wg)
-	go s.encrypt("album slug", album.Slug, slugCh, errCh, &wg)
-
-	wg.Wait()
-	close(titleCh)
-	close(descriptionCh)
-	close(slugCh)
-	close(errCh)
-
-	// check for errors during encryption
-	if len(errCh) > 0 {
-		var errs []error
-		for e := range errCh {
-			errs = append(errs, e)
-		}
-		if len(errs) > 0 {
-			return fmt.Errorf("failed to encrypt album record: %v", errors.Join(errs...))
-		}
-	}
-
-	// set the encrypted fields in the album record
-	album.Title = <-titleCh
-	album.Description = <-descriptionCh
-	album.Slug = <-slugCh
-
-	return nil
-}
-
-// encrypt is a helper method that encrypts a field in the album record.
-func (s *service) encrypt(field, plaintext string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	if plaintext == "" {
-		errCh <- fmt.Errorf("field '%s' cannot be empty", field)
-		return
-	}
-
-	// encrypt the field
-	encrypted, err := s.cryptor.EncryptServiceData([]byte(plaintext))
-	if err != nil {
-		errCh <- fmt.Errorf("failed to encrypt '%s' field '%s': %v", field, plaintext, err)
-		return
-	}
-
-	fieldCh <- encrypted
-}
-
-// decryptAlbumRecord decrypts the sensitive fields in the album record.
-
-func (s *service) decryptAlbumRecord(album *AlbumRecord) error {
-	if album == nil {
-		return fmt.Errorf("album record cannot be nil")
-	}
-
-	var (
-		wg            sync.WaitGroup
-		titleCh       = make(chan string, 1)
-		descriptionCh = make(chan string, 1)
-		slugCh        = make(chan string, 1)
-		errCh         = make(chan error, 3)
-	)
-
-	wg.Add(3)
-	go s.decrypt("album title", album.Title, titleCh, errCh, &wg)
-	go s.decrypt("album description", album.Description, descriptionCh, errCh, &wg)
-	go s.decrypt("album slug", album.Slug, slugCh, errCh, &wg)
-
-	wg.Wait()
-	close(titleCh)
-	close(descriptionCh)
-	close(slugCh)
-	close(errCh)
-
-	// check for errors during decryption
-	if len(errCh) > 0 {
-		var errs []error
-		for e := range errCh {
-			errs = append(errs, e)
-		}
-		if len(errs) > 0 {
-			return fmt.Errorf("failed to decrypt album record: %v", errors.Join(errs...))
-		}
-	}
-
-	// set the decrypted fields in the album record
-	album.Title = <-titleCh
-	album.Description = <-descriptionCh
-	album.Slug = <-slugCh
-
-	// also need to remove the blind index from the album record
-	album.SlugIndex = ""
-
-	return nil
-}
-
-// decrypt is a helper method that decrypts a field in the album record.
-func (s *service) decrypt(field, ciphertext string, fieldCh chan string, errCh chan error, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	if ciphertext == "" {
-		errCh <- fmt.Errorf("field '%s' cannot be empty", field)
-		return
-	}
-
-	// decrypt the field
-	decrypted, err := s.cryptor.DecryptServiceData(ciphertext)
-	if err != nil {
-		errCh <- fmt.Errorf("failed to decrypt '%s' field: %v", field, err)
-		return
-	}
-
-	fieldCh <- string(decrypted)
 }

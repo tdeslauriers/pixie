@@ -16,6 +16,7 @@ const (
 
 	ComponentMain              = "main"
 	ComponentImage             = "image"
+	ComponentImageCryptor      = "image cryptor"
 	ComponentGallery           = "gallery"
 	ComponentPermissions       = "permissions"
 	ComponentPatron            = "patron"
@@ -23,6 +24,7 @@ const (
 	ComponentPatronRegister    = "patron register"
 	ComponentAlbumSerivce      = "album service"
 	ComponentAlbumHandler      = "album handler"
+	ComponentAlbumCryptor      = "album cryptor"
 
 	// service keys
 	ServiceKey = "service"

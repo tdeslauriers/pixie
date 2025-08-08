@@ -3,10 +3,10 @@ package image
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
-	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
@@ -26,7 +26,7 @@ type Service interface {
 	// eg, the id, slug, title, and description provided by the user.
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
-	BuildPlaceholder(r *ImageRecord) (*url.URL, error)
+	BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error)
 }
 
 // NewService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -34,8 +34,9 @@ func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj stor
 	return &imageService{
 		sql:     sql,
 		indexer: i,
-		cryptor: c,
+		cryptor: NewCryptor(c),
 		store:   obj,
+
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackageImage)).
 			With(slog.String(util.ComponentKey, util.ComponentImage)).
@@ -48,7 +49,7 @@ var _ Service = (*imageService)(nil)
 type imageService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
-	cryptor data.Cryptor
+	cryptor Cryptor // image data specific wrapper around data.Cryptor
 	store   storage.ObjectStorage
 
 	logger *slog.Logger
@@ -90,57 +91,18 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 		return nil, fmt.Errorf("failed to select image record for slug '%s': %v", slug, err)
 	}
 
-	// decrypt sensitive fields in the image record
-	var (
-		wg      sync.WaitGroup
-		titleCh = make(chan string, 1)
-		descCh  = make(chan string, 1)
-		fnCh    = make(chan string, 1) // file name is encrypted because it is made of the slug
-		okCh    = make(chan string, 1) // object key is encrypted because it is made of the slug
-		slugCh  = make(chan string, 1)
-		IdCh    = make(chan string, 1) // image date is encrypted
-
-		errCh = make(chan error, 6) // to capture any errors from decryption
-	)
-	wg.Add(5)
-	go s.decrypt(record.Title, "title", titleCh, errCh, &wg)
-	go s.decrypt(record.Description, "description", descCh, errCh, &wg)
-	go s.decrypt(record.FileName, "filename", fnCh, errCh, &wg)
-	go s.decrypt(record.ObjectKey, "object key", okCh, errCh, &wg)
-	go s.decrypt(record.Slug, "slug", slugCh, errCh, &wg)
-
-	// may not exist yet or may have been an error in processing pipeline reading exif data
-	if record.ImageDate != "" {
-		wg.Add(1)
-		go s.decrypt(record.ImageDate, "image date", IdCh, errCh, &wg)
-	}
-
-	// wait for all goroutines to finish
-	wg.Wait()
-	close(titleCh)
-	close(descCh)
-	close(fnCh)
-	close(okCh)
-	close(slugCh)
-	close(IdCh)
-	close(errCh)
-
-	// check for any errors during decryption
-	if len(errCh) > 0 {
-		errs := make([]string, 0, len(errCh)+1)
-		for err := range errCh {
-			errs = append(errs, err.Error())
-		}
-		return nil, fmt.Errorf("failed to decrypt image data field value(s): %s", strings.Join(errs, "; "))
+	// decrypt the sensitive fields in the image record
+	if err := s.cryptor.DecryptImageRecord(&record); err != nil {
+		return nil, fmt.Errorf("failed to decrypt image record for slug '%s': %v", slug, err)
 	}
 
 	// Generate a signed URL for the image from object storage service
-	objKey := <-okCh
-	if objKey == "" {
+	if record.ObjectKey == "" {
 		return nil, fmt.Errorf("object key for image '%s' is empty", slug)
 	}
 
-	signedURL, err := s.store.GetSignedUrl(objKey)
+	// object key has been decrypted above
+	signedURL, err := s.store.GetSignedUrl(record.ObjectKey)
 	if err != nil {
 		s.logger.Error(fmt.Sprintf("failed to get signed URL for image %s: %v", slug, err))
 		return nil, err
@@ -154,16 +116,16 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 	// create the ImageData struct to return
 	image := &ImageData{
 		Id:          record.Id,
-		Title:       <-titleCh,
-		Description: <-descCh,
-		FileName:    <-fnCh,
+		Title:       record.Title,
+		Description: record.Description,
+		FileName:    record.FileName,
 		FileType:    record.FileType,
-		ObjectKey:   objKey, // channel was already read from to get signed URL
-		Slug:        <-slugCh,
+		ObjectKey:   record.ObjectKey,
+		Slug:        record.Slug,
 		Width:       record.Width,
 		Height:      record.Height,
 		Size:        record.Size,
-		ImageDate:   <-IdCh, // fine if it is empty
+		ImageDate:   record.ImageDate, // possibly empty, which is fine.
 		CreatedAt:   record.CreatedAt.String(),
 		UpdatedAt:   record.UpdatedAt.String(),
 		IsArchived:  record.IsArchived,
@@ -176,90 +138,77 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 }
 
 // BuildPlaceholder is the concrete implementation of the interface method which
-// builds the metadata for a placeholder image record.
-// eg, the id, slug, title, and description provided by the user.
-// Once meta data persisted, a presigned put url is generated and returned.
+// builds the metadata for a placeholder image from an add image cmd.
 // The image processing pipeline will build the rest of the record upon ingestion of the image file.
-func (s *imageService) BuildPlaceholder(r *ImageRecord) (*url.URL, error) {
+func (s *imageService) BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error) {
 
 	// validate the created metadata
 	// should be a redundant check, but good practice
-	if err := r.Validate(); err != nil {
+	if err := cmd.Validate(); err != nil {
 		return nil, fmt.Errorf("failed to validate image record: %v", err)
 	}
 
-	// encrypt the sensitive fields in the image record
-	var (
-		wg sync.WaitGroup
-
-		titleCh = make(chan string, 1)
-		descCh  = make(chan string, 1)
-		fnCh    = make(chan string, 1) // file name is encrypted because it is made of the slug
-		okCh    = make(chan string, 1) // object key is encrypted because it is made of the slug
-		slugCh  = make(chan string, 1)
-		idxCh   = make(chan string, 1) // to capture the slug index for fast lookups, generated from the slug
-
-		errCh = make(chan error, 6) // to capture any errors from encryption + slug index creation
-	)
-
-	wg.Add(5)
-	go s.encrypt(r.Title, "title", titleCh, errCh, &wg)
-	go s.encrypt(r.Description, "description", descCh, errCh, &wg)
-	go s.encrypt(r.FileName, "file name", fnCh, errCh, &wg)
-	go s.encrypt(r.ObjectKey, "object key", okCh, errCh, &wg)
-	go s.encrypt(r.Slug, "slug", slugCh, errCh, &wg)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		// generate a blind index for the slug
-		index, err := s.indexer.ObtainBlindIndex(r.Slug)
-		if err != nil {
-			s.logger.Error(fmt.Sprintf("failed to generate blind index for slug '%s': %v", r.Slug, err))
-			errCh <- err
-			return
-		}
-		idxCh <- index
-	}()
-
-	// wait for all goroutines to finish
-	wg.Wait()
-	close(titleCh)
-	close(descCh)
-	close(fnCh)
-	close(okCh)
-	close(slugCh)
-	close(idxCh)
-	close(errCh)
-
-	// check for any errors during encryption or index generation
-	if len(errCh) > 0 {
-		errs := make([]string, 0, len(errCh)+1)
-		for err := range errCh {
-			errs = append(errs, err.Error())
-		}
-		return nil, fmt.Errorf("failed to encrypt image fields and/or generate slug index: %s", strings.Join(errs, "; "))
+	// notification from the object storage service
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate new image record id: %v", err)
 	}
 
-	// need to make a copy of the image record to avoid modifying the original
-	imageRecord := ImageRecord{
-		Id:          r.Id,
-		Title:       <-titleCh,
-		Description: <-descCh,
-		FileName:    <-fnCh,
-		FileType:    r.FileType,
-		ObjectKey:   <-okCh,
-		Slug:        <-slugCh,
-		SlugIndex:   <-idxCh,
-		Width:       r.Width,
-		Height:      r.Height,
-		Size:        r.Size,
-		ImageDate:   r.ImageDate,
-		CreatedAt:   r.CreatedAt,
-		UpdatedAt:   r.UpdatedAt,
-		IsArchived:  r.IsArchived,
-		IsPublished: r.IsPublished,
+	// create the slug (which is a unique identifier shared as the filename in object storage)
+	slug, err := uuid.NewRandom()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate slug for new image record: %v", err)
+	}
+
+	// get file type from the command --> extension
+	ext, err := cmd.GetExtension()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file extension from command: %v", err)
+	}
+
+	// build the filename for the image file
+	// this should not change even if the namespace changes in the object storage service
+	fileName := fmt.Sprintf("%s.%s", slug.String(), ext)
+
+	// build the object key for the image file in object storage
+	objectKey := fmt.Sprintf("uploads/%s", fileName)
+
+	now := time.Now().UTC()
+
+	// incomplete/stubbed image record missing fields that will be filled in later
+	// when the image file is processed and the object storage service notifies the image service
+	record := ImageRecord{
+		Id:          id.String(),
+		Title:       strings.TrimSpace(cmd.Title),
+		Description: strings.TrimSpace(cmd.Description),
+		FileName:    fileName,
+		FileType:    strings.TrimSpace(cmd.FileType),
+		ObjectKey:   objectKey,
+		Slug:        slug.String(),
+		Size:        cmd.Size,
+		Width:       0, // default to 0 until image is processed
+		Height:      0, // default to 0 until image is processed
+		CreatedAt:   data.CustomTime{Time: now},
+		UpdatedAt:   data.CustomTime{Time: now}, // updated at is the same as created at for a new record
+		IsArchived:  false,                      // default to not archived
+		IsPublished: false,                      // default to not published --> image prcessing pipeline will publish the image when processing is complete
+	}
+
+	// get the blind index for the slug
+	index, err := s.indexer.ObtainBlindIndex(record.Slug)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate blind index for image slug '%s': %v", record.Slug, err)
+	}
+
+	// set the slug index for the image record
+	record.SlugIndex = index
+
+	// create a copy of the record to avoid modifying the original
+	copy := record
+
+	// encrypt the sensitive fields in the copy of the image record
+	if err := s.cryptor.EncryptImageRecord(&copy); err != nil {
+		return nil, fmt.Errorf("failed to encrypt image record '%s': %v", record.Id, err)
 	}
 
 	// insert record into the database
@@ -282,16 +231,33 @@ func (s *imageService) BuildPlaceholder(r *ImageRecord) (*url.URL, error) {
 		is_archived,
 		is_published
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	if err := s.sql.InsertRecord(qry, imageRecord); err != nil {
+	if err := s.sql.InsertRecord(qry, copy); err != nil {
 		return nil, fmt.Errorf("failed to insert image record into database: %v", err)
 	}
 
 	// generate a presigned put URL for the image file in object storage
-	putUrl, err := s.store.GetPreSignedPutUrl(r.ObjectKey)
+	putUrl, err := s.store.GetPreSignedPutUrl(record.ObjectKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get presigned put URL for image object key '%s': %v", r.ObjectKey, err)
+		return nil, fmt.Errorf("failed to get presigned put URL for image object key '%s': %v", record.ObjectKey, err)
 	}
-	return putUrl, nil
+
+	// build image meta data struct to return
+	data := &ImageData{
+		Id:          record.Id,
+		Title:       record.Title,
+		Description: record.Description,
+		FileName:    record.FileName,
+		FileType:    record.FileType,
+		ObjectKey:   record.ObjectKey, // this is the "uploads/slug.jpg" key in object storage -> staging
+		Slug:        record.Slug,
+		Size:        record.Size,
+		CreatedAt:   record.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   record.UpdatedAt.Format(time.RFC3339), // format the time as RFC3339
+		IsArchived:  record.IsArchived,
+		IsPublished: record.IsPublished,
+		SignedUrl:   putUrl.String(), // the pre-signed PUT URL for the browser to upload the image file into object storage
+	}
+	return data, nil
 }
 
 // UpdateImageData is the concrete implementation of the interface method which
@@ -322,40 +288,12 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 	// if it needs to be updated, the slug should be specifically changed by a separate method.
 	index, err := s.indexer.ObtainBlindIndex(existing.Slug)
 	if err != nil {
-		return fmt.Errorf("failed to generate blind index for imaage slug '%s': %v", updated.Slug, err)
+		return fmt.Errorf("failed to generate blind index for image slug '%s': %v", updated.Slug, err)
 	}
 
 	// encrypt the sensitive fields in the updated image record
-	var (
-		wg        sync.WaitGroup
-		titleCh   = make(chan string, 1)
-		descCh    = make(chan string, 1)
-		imgDateCh = make(chan string, 1) // image date is encrypted to prevent leakage of sensitive information due to low numbers of images in certain years.
-		objKeyCh  = make(chan string, 1) // object key may have changed if the image was unpublished or if the upload pipeline failed.
-		errCh     = make(chan error, 4)  // to capture any errors from encryption
-	)
-
-	wg.Add(4)
-	go s.encrypt(updated.Title, "title", titleCh, errCh, &wg)
-	go s.encrypt(updated.Description, "description", descCh, errCh, &wg)
-	go s.encrypt(updated.ImageDate, "image date", imgDateCh, errCh, &wg)
-	go s.encrypt(updated.ObjectKey, "object key", objKeyCh, errCh, &wg)
-
-	// wait for all goroutines to finish
-	wg.Wait()
-	close(titleCh)
-	close(descCh)
-	close(imgDateCh)
-	close(objKeyCh) // need to close this channel even if it was not used
-	close(errCh)
-
-	// check for any errors during encryption
-	if len(errCh) > 0 {
-		errs := make([]string, 0, len(errCh)+1)
-		for err := range errCh {
-			errs = append(errs, err.Error())
-		}
-		return fmt.Errorf("failed to encrypt image fields: %s", strings.Join(errs, "; "))
+	if err := s.cryptor.EncryptImageRecord(updated); err != nil {
+		return fmt.Errorf("failed to encrypt updated image data for slug '%s': %v", updated.Slug, err)
 	}
 
 	// update the image record in the database
@@ -370,7 +308,16 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 			is_archived = ?,
 			is_published = ?
 		WHERE slug_index = ?`
-	if err := s.sql.UpdateRecord(qry, <-titleCh, <-descCh, <-objKeyCh, <-imgDateCh, updated.UpdatedAt, updated.IsArchived, updated.IsPublished, index); err != nil {
+	if err := s.sql.UpdateRecord(
+		qry,
+		updated.Title,
+		updated.Description,
+		updated.ObjectKey,
+		updated.ImageDate,
+		updated.UpdatedAt,
+		updated.IsArchived,
+		updated.IsPublished,
+		index); err != nil {
 		return fmt.Errorf("failed to update image record in database: %v", err)
 	}
 
@@ -383,38 +330,4 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 	}
 
 	return nil
-}
-
-// encrypt is a helper function that encrypts the sensitive fields for the image service.
-// mostly it exists so the code looks cleaner and more readable.
-func (s *imageService) encrypt(plaintext, fieldname string, encCh chan string, errCh chan error, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	// encrypt the plaintext
-	ciphertext, err := s.cryptor.EncryptServiceData([]byte(plaintext))
-	if err != nil {
-		s.logger.Error(fmt.Sprintf("failed to encryp %s '%s': %v", fieldname, plaintext, err))
-		errCh <- err
-		return
-	}
-
-	// send the ciphertext to the channel
-	encCh <- ciphertext
-}
-
-// decrypt is a helper function that decrypts the sensitive fields for the image service.
-func (s *imageService) decrypt(ciphertext, fieldname string, decCh chan string, errCh chan error, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	// decrypt the ciphertext
-	plaintext, err := s.cryptor.DecryptServiceData(ciphertext)
-	if err != nil {
-		s.logger.Error(fmt.Sprintf("failed to decrypt %s: %v", fieldname, err))
-		errCh <- err
-		return
-	}
-
-	// send the plaintext to the channel
-	decCh <- string(plaintext)
 }

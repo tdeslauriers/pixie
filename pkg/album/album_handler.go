@@ -20,6 +20,9 @@ var (
 // Handler is an interface that defines methods for handling album-related requests.
 type Handler interface {
 
+	// HandleAlbum handles requests related to a specific album.
+	HandleAlbum(w http.ResponseWriter, r *http.Request)
+
 	// HandleAlbums handles requests related to albums.
 	HandleAlbums(w http.ResponseWriter, r *http.Request)
 }
@@ -48,6 +51,30 @@ type handler struct {
 	iam jwt.Verifier // inherently nil because this will come from registration -> s2s
 
 	logger *slog.Logger
+}
+
+// HandleAlbum is the concrete implementation of the interface method which handles album-related requests
+// for a specific album.
+func (h *handler) HandleAlbum(w http.ResponseWriter, r *http.Request) {
+
+	switch r.Method {
+	case http.MethodGet:
+		h.handleGetAlbum(w, r)
+		return
+	// case http.MethodPut:
+	// 	h.handleUpdateAlbum(w, r)
+	// 	return
+	// case http.MethodDelete:
+	// 	h.handleDeleteAlbum(w, r)
+	// 	return
+	default:
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusMethodNotAllowed,
+			Message:    "Method not allowed",
+		}
+		e.SendJsonErr(w)
+		return
+	}
 }
 
 // HandleAlbums is the concrete implementation of the interface method which handles album-related requests.
@@ -108,6 +135,61 @@ func (h *handler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "Failed to encode albums",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+}
+
+// handleGetAlbum handles the retrieval of a specific album record.
+func (h *handler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
+
+	// validate service token
+	s2sToken := r.Header.Get("Service-Authorization")
+	if _, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken); err != nil {
+		connect.RespondAuthFailure(connect.S2s, err, w)
+		return
+	}
+
+	// validate iam token
+	iamToken := r.Header.Get("Authorization")
+	authorized, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
+	if err != nil {
+		connect.RespondAuthFailure(connect.User, err, w)
+		return
+	}
+
+	// extract the slug from the request URL
+	slug, err := connect.GetValidSlug(r)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to extract album slug from request url: %v", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    "Failed to extract album slug from request url",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// retrieve the album record
+	album, err := h.svc.GetAlbumBySlug(slug, authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to retrieve album '%s' for user '%s': %v", slug, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to retrieve album",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(album); err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to encode album '%s': %v", album.Title, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to encode album",
 		}
 		e.SendJsonErr(w)
 		return

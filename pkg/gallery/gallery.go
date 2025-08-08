@@ -165,7 +165,7 @@ func New(config *config.Config) (Gallery, error) {
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
-		albums:           album.NewService(repository, indexer, cryptor),
+		albums:           album.NewService(repository, indexer, cryptor, objStore),
 		images:           image.NewService(repository, indexer, cryptor, objStore),
 		patrons:          patron.NewService(repository, indexer, cryptor),
 		permissions:      permission.NewService(repository, indexer, cryptor),
@@ -211,8 +211,8 @@ func (g *gallery) Run() error {
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
 	// album handler
-	albumHandler := album.NewHandler(g.albums, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/albums", albumHandler.HandleAlbums) // handles album listing and creation
+	alb := album.NewHandler(g.albums, g.s2sVerifier, g.iamVerifier)
+	mux.HandleFunc("/albums", alb.HandleAlbums) // handles album listing and creation
 
 	// image handler
 	img := image.NewHandler(g.images, g.s2sVerifier, g.iamVerifier)
