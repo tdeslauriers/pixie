@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
@@ -372,8 +371,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 	// TODO: add the pre-added album mappings from the upload command. --> may also included adding album record.
 	// TODO: add the pre-added permissions tags from the upload command.
 
-
-	h.logger.Info(fmt.Sprintf("/images/ handler successfully created placeholder image record with id %s", imageRecord.Id))
+	h.logger.Info(fmt.Sprintf("/images/ handler successfully created placeholder image record with id %s", placeholder.Id))
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(placeholder); err != nil {
