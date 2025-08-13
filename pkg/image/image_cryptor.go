@@ -127,9 +127,6 @@ func (ic *imageCryptor) encryptImageFieldData(
 	if imageDatePtr != nil && *imageDatePtr != "" {
 		wg.Add(1)
 		go ic.encrypt(*imageDatePtr, "image date", imgDateCh, errCh, &wg)
-	} else {
-		// if the image date is not set, we can skip encrypting it
-		imgDateCh <- ""
 	}
 
 	// wait for all goroutines to finish
