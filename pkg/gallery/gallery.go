@@ -213,6 +213,7 @@ func (g *gallery) Run() error {
 	// album handler
 	alb := album.NewHandler(g.albums, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/albums", alb.HandleAlbums) // handles album listing and creation
+	mux.HandleFunc("/albums/", alb.HandleAlbum) // trailing slash is so slugs can be appended to the path
 
 	// image handler
 	img := image.NewHandler(g.images, g.s2sVerifier, g.iamVerifier)

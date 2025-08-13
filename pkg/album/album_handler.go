@@ -61,9 +61,9 @@ func (h *handler) HandleAlbum(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		h.handleGetAlbum(w, r)
 		return
-	// case http.MethodPut:
-	// 	h.handleUpdateAlbum(w, r)
-	// 	return
+	case http.MethodPost:
+		h.handleUpdateAlbum(w, r)
+		return
 	// case http.MethodDelete:
 	// 	h.handleDeleteAlbum(w, r)
 	// 	return
@@ -174,7 +174,7 @@ func (h *handler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 	// retrieve the album record
 	album, err := h.svc.GetAlbumBySlug(slug, authorized.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("Failed to retrieve album '%s' for user '%s': %v", slug, err))
+		h.logger.Error(fmt.Sprintf("Failed to retrieve album '%s' for user '%s': %v", slug, authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "Failed to retrieve album",
@@ -194,6 +194,74 @@ func (h *handler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 		e.SendJsonErr(w)
 		return
 	}
+}
+
+// handleUpdateAlbum handles the update of an existing album record.
+func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
+
+	// validate service token
+	s2sToken := r.Header.Get("Service-Authorization")
+	if _, err := h.s2s.BuildAuthorized(editAlbumAllowed, s2sToken); err != nil {
+		connect.RespondAuthFailure(connect.S2s, err, w)
+		return
+	}
+
+	// validate iam token
+	iamToken := r.Header.Get("Authorization")
+	authorized, err := h.iam.BuildAuthorized(editAlbumAllowed, iamToken)
+	if err != nil {
+		connect.RespondAuthFailure(connect.User, err, w)
+		return
+	}
+
+	// extract the slug from the request URL
+	slug, err := connect.GetValidSlug(r)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to extract album slug from request url: %v", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    "Failed to extract album slug from request url",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// decode the request body into an cmd record
+	var cmd UpdateAlbumCmd
+	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		h.logger.Error("Failed to decode album record", slog.Any("error", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    "Failed to decode album record",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// validate the album record
+	if err := cmd.Validate(); err != nil {
+		h.logger.Error("Album record validation failed", slog.Any("error", err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusUnprocessableEntity,
+			Message:    "Album record validation failed",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// update the album record in the database
+	updated, err := h.svc.UpdateAlbum(slug, cmd, authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to update album record '%s': %v", slug, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to update album record",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// audit log
 }
 
 // handleCreateAlbum handles the creation of a new album record.

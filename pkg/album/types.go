@@ -187,17 +187,21 @@ func buildAlbumSQuery(ps map[string]permissions.PermissionRecord) (string, error
 			LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid`)
 
 	// create the where clause based on the permissions uuids AS VARIABLES/PARAMS
-	qb.WriteString(`
+	// Note: curator should see everything, so we don't filter by permissions if present
+	if _, ok := ps["Gallery Curator"]; !ok {
+
+		qb.WriteString(`
 		WHERE ip.permission_uuid IN (`)
-	i := 0
-	for range ps {
-		if i > 0 {
-			qb.WriteString(", ")
+		i := 0
+		for range ps {
+			if i > 0 {
+				qb.WriteString(", ")
+			}
+			qb.WriteString("?")
+			i++
 		}
-		qb.WriteString("?")
-		i++
+		qb.WriteString(`)`)
 	}
-	qb.WriteString(`)`)
 
 	// check if permissions include 'Gallery Curator'
 	if _, ok := ps["Gallery Curator"]; !ok {
@@ -231,8 +235,8 @@ type AlbumImageRecord struct {
 	Height           int             `db:"height"`             // Height of the image in pixels
 	Size             int64           `db:"size"`               // Size of the image file in bytes
 	ImageDate        string          `db:"image_date"`         // encrypted: date when the image was taken or created, ie, from exif metadata
-	ImageCreatedAt   data.CustomTime `db:"image_created_at"`   // Timestamp when the image was created
-	ImageUpdatedAt   data.CustomTime `db:"image_updated_at"`   // Timestamp when the image was last updated
+	ImageCreatedAt   string          `db:"image_created_at"`   // Timestamp when the image was created
+	ImageUpdatedAt   string          `db:"image_updated_at"`   // Timestamp when the image was last updated
 	ImageIsArchived  bool            `db:"image_is_archived"`  // Indicates if the image is archived
 	ImageIsPublished bool            `db:"image_is_published"` // Indicates if the image is published and visible to users
 }
@@ -247,6 +251,7 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 	}
 
 	// create album image select statement
+	// Note: we use COALESCE to return empty strings for NULL values in the image fields
 	var qb strings.Builder
 	qb.WriteString(`
 		SELECT
@@ -257,21 +262,21 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 			a.created_at AS album_created_at,
 			a.updated_at AS album_updated_at,
 			a.is_archived AS album_is_archived,
-			i.uuid AS image_uuid,
-			i.title AS image_title,
-			i.description AS image_description,
-			i.file_name,
-			i.file_type,
-			i.object_key,
-			i.slug AS image_slug,
-			i.width,
-			i.height,
-			i.size,
-			i.image_date,
-			i.created_at AS image_created_at,
-			i.updated_at AS image_updated_at,
-			i.is_archived AS image_is_archived,
-			i.is_published AS image_is_published
+			COALESCE(i.uuid, '') AS image_uuid,
+			COALESCE(i.title, '') AS image_title,
+			COALESCE(i.description, '') AS image_description,
+			COALESCE(i.file_name,'') AS file_name,
+			COALESCE(i.file_type, '') AS file_type,
+			COALESCE(i.object_key, '') AS image_object_key,
+			COALESCE(i.slug, '') AS image_slug,
+			COALESCE(i.width, 0) AS width,
+			COALESCE(i.height, 0) AS height,
+			COALESCE(i.size, 0) AS size,
+			COALESCE(i.image_date, '') AS image_date,
+			COALESCE(i.created_at, '') AS image_created_at,
+			COALESCE(i.updated_at, '') AS image_updated_at,
+			COALESCE(i.is_archived, FALSE) AS image_is_archived,
+			COALESCE(i.is_published, FALSE) AS image_is_published
 		FROM album a
 			LEFT OUTER JOIN album_image ai ON a.uuid = ai.album_uuid
 			LEFT OUTER JOIN image i ON ai.image_uuid = i.uuid
@@ -279,17 +284,20 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 
 	// add where clause to filter by album id and permissions uuids as variables/params
 	qb.WriteString(`
-		WHERE a.slug_index = ?
-		  AND ip.permission_uuid IN (`)
-	i := 0
-	for range ps {
-		if i > 0 {
-			qb.WriteString(", ")
+		WHERE a.slug_index = ?`)
+
+	if _, ok := ps["Gallery Curator"]; !ok {
+		qb.WriteString(`AND ip.permission_uuid IN (`)
+		i := 0
+		for range ps {
+			if i > 0 {
+				qb.WriteString(", ")
+			}
+			qb.WriteString("?")
+			i++
 		}
-		qb.WriteString("?")
-		i++
+		qb.WriteString(")")
 	}
-	qb.WriteString(")")
 
 	// check if permissions include 'Gallery Curator'
 	if _, ok := ps["Gallery Curator"]; !ok {
@@ -300,4 +308,40 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 	}
 
 	return qb.String(), nil
+}
+
+// AlbumUpdateCmd is a model which represents the command to update an existing album record.
+type AlbumUpdateCmd struct {
+	Csrf        string `json:"csrf,omitempty"` // this may not always be required
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	IsArchived  bool   `json:"is_archived"`
+}
+
+func (cmd *AlbumUpdateCmd) Validate() error {
+
+	// validate CSRF token, if present -> not always required
+	if cmd.Csrf != "" && !validate.IsValidUuid(cmd.Csrf) {
+		return fmt.Errorf("invalid CSRF token")
+	}
+
+	// validate title
+	if cmd.Title == "" {
+		return fmt.Errorf("title is required")
+	}
+
+	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), TitleRegex) {
+		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
+	}
+
+	// validate description
+	if cmd.Description == "" {
+		return fmt.Errorf("description is required")
+	}
+
+	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), DescriptionRegex) {
+		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
+	}
+
+	return nil
 }

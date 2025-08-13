@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,8 +90,11 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 
 	// convert the permissions map into a variatic slice of interface{}, ie args ...interface{}
 	args := make([]interface{}, 0, len(psMap))
-	for _, p := range psMap {
-		args = append(args, p.Id)
+	// if user is curator, no need to filter by permissions
+	if _, ok := psMap["Gallery Curator"]; !ok {
+		for _, p := range psMap {
+			args = append(args, p.Id)
+		}
 	}
 
 	var albums []AlbumRecord
@@ -170,8 +174,12 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 	// convert the permissions map into a variatic slice of interface{}, ie args ...interface{}
 	args := make([]interface{}, 0, len(psMap)+1) // capacity needs to include the slug index
 	args = append(args, slugIndex)               // index in first args position
-	for _, p := range psMap {
-		args = append(args, p.Id)
+	// if user is curator, no need to filter by permissions
+	if _, ok := psMap["Gallery Curator"]; !ok {
+		// append the permissions uuids to the args slice
+		for _, p := range psMap {
+			args = append(args, p.Id)
+		}
 	}
 
 	var records []AlbumImageRecord
@@ -179,13 +187,13 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to find images user '%s' has permission to view in this album", username)
 		} else {
-			return nil, fmt.Errorf("failed to retrieve album slug %s from database for user '%s'", slug, username)
+			return nil, fmt.Errorf("failed to retrieve album slug %s from database for user '%s': %v", slug, username, err)
 		}
 	}
 
 	// seocondary check to ensure we have records
 	if len(records) == 0 {
-		return nil, fmt.Errorf("no images found for album slug %s and user %s's permissions level(s)", slug)
+		return nil, fmt.Errorf("no images found for album slug %s and user %s's permissions level(s)", slug, username)
 	}
 
 	// build the album modelfrom the first record
@@ -248,10 +256,17 @@ func (s *service) buildImageData(records []AlbumImageRecord) ([]image.ImageData,
 				ObjectKey:   r.ObjectKey,
 				Slug:        r.ImageSlug,
 				ImageDate:   r.ImageDate,
-				CreatedAt:   r.ImageCreatedAt.Format(time.RFC3339),
-				UpdatedAt:   r.ImageUpdatedAt.Format(time.RFC3339),
+				CreatedAt:   r.ImageCreatedAt,
+				UpdatedAt:   r.ImageUpdatedAt,
 				IsArchived:  r.ImageIsArchived,
 				IsPublished: r.ImageIsPublished,
+			}
+
+			// possible all fields will be empty if no images are attached to the album
+			// if the id is empty, very likely all fields are empty
+			if img.Id == "" {
+				s.logger.Warn(fmt.Sprintf("image index[%i] fields are empty for album %s", r.AlbumTitle))
+				return
 			}
 
 			// decrypt the sensitive fields in the image data
@@ -263,18 +278,19 @@ func (s *service) buildImageData(records []AlbumImageRecord) ([]image.ImageData,
 			// get a presigned URL for the thumbnail image
 			url, err := s.store.GetSignedUrl(fmt.Sprintf("%s_thumbnail", img.ObjectKey))
 			if err != nil {
-				errCh <- fmt.Errorf("failed to get presigned URL for image '%s', filename '%s' record's thumbnail: %v", img.Id, img.FileName, err)
-				return
+				if strings.Contains(err.Error(), "does not exist") {
+					s.logger.Warn(fmt.Sprintf("thumbnail image for image '%s', filename '%s' does not exist in object storage", img.Id, img.FileName))
+				} else {
+					errCh <- fmt.Errorf("failed to get presigned URL for image '%s', filename '%s' record's thumbnail: %v", img.Id, img.FileName, err)
+					return
+				}
 			}
 
-			// if the url is empty, log an error and continue
-			if url == nil || url.String() == "" {
-				errCh <- fmt.Errorf("presigned URL for image '%s', filname '%s' record's thumbnail is empty", img.Id, img.FileName)
-				return
+			// if the url is empty, skip setting it on the image data
+			if url != nil {
+				// set the signed thumbnail URL in the image data
+				img.SignedUrl = url.String()
 			}
-
-			// set the signed thumbnail URL in the image data
-			img.SignedUrl = url.String()
 
 			// set the image data in the slice
 			images[i] = *img
