@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/util"
 )
@@ -31,7 +33,6 @@ type Handler interface {
 func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
 	return &handler{
 		svc: s,
-
 		s2s: s2s,
 		iam: iam,
 
@@ -227,7 +228,7 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// decode the request body into an cmd record
-	var cmd UpdateAlbumCmd
+	var cmd AlbumUpdateCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error("Failed to decode album record", slog.Any("error", err))
 		e := connect.ErrorHttp{
@@ -249,9 +250,31 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// update the album record in the database
-	updated, err := h.svc.UpdateAlbum(slug, cmd, authorized.Claims.Subject)
+	// lookup the existing album record to ensure it exists
+	existing, err := h.svc.GetAlbumBySlug(slug, authorized.Claims.Subject)
 	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to retrieve existing album '%s' for user '%s': %v", slug, authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to retrieve existing album",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// build the updated album record
+	// only certain fields can be updated; other fields are immutable and will be ignored
+	updated := AlbumRecord{
+		Id:          existing.Id, // immutable
+		Title:       cmd.Title,
+		Description: cmd.Description,
+		IsArchived:  cmd.IsArchived,
+		Slug:        existing.Slug, // slug is immutable -> needed to get blind index
+		UpdatedAt:   data.CustomTime{Time: time.Now().UTC()},
+	}
+
+	// update the album record in the database
+	if err := h.svc.UpdateAlbum(updated); err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to update album record '%s': %v", slug, err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
@@ -262,6 +285,20 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// audit log
+	if updated.Title != existing.Title {
+		h.logger.Info(fmt.Sprintf("album record title '%s' updated to '%s' by user '%s'", existing.Title, updated.Title, authorized.Claims.Subject))
+	}
+
+	if updated.Description != existing.Description {
+		h.logger.Info(fmt.Sprintf("album record description '%s' updated to '%s' by user '%s'", authorized.Claims.Subject))
+	}
+
+	if updated.IsArchived != existing.IsArchived {
+		h.logger.Info(fmt.Sprintf("album record is_archived status changed to '%t' by user '%s'", updated.IsArchived, authorized.Claims.Subject))
+	}
+
+	// respond 204 No Content
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleCreateAlbum handles the creation of a new album record.

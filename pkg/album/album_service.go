@@ -33,6 +33,9 @@ type Service interface {
 	// returns a pointer to the created album record,
 	// or returns an error if the creation fails.
 	CreateAlbum(album AddAlbumCmd) (*AlbumRecord, error)
+
+	// UpdateAlbum updates an existing album record in the database.
+	UpdateAlbum(updated AlbumRecord) error
 }
 
 // NewService creates a new album service and provides a pointer to a concrete implementation.
@@ -390,4 +393,51 @@ func (s *service) CreateAlbum(cmd AddAlbumCmd) (*AlbumRecord, error) {
 	album.Slug = slug.String()
 
 	return album, nil
+}
+
+// UpdateAlbum updates an existing album record in the database.
+func (s *service) UpdateAlbum(updated AlbumRecord) error {
+
+	// validate the updated album record
+	// redundant check, but good practice
+	if err := updated.Validate(); err != nil {
+		return fmt.Errorf("invalid updated album record: %v", err)
+	}
+
+	// build blind index for the slug
+	slugIndex, err := s.indexer.ObtainBlindIndex(updated.Slug)
+	if err != nil {
+		return fmt.Errorf("failed to generate blind index for album slug '%s': %v", updated.Slug, err)
+	}
+
+	// encrypt the sensitive fields in the album record
+	// dont need to create a copy because passed in as value
+	if err := s.cryptor.EncryptAlbumRecord(&updated); err != nil {
+		return err
+	}
+
+	// build the update query
+	qry := `
+		UPDATE album
+		SET
+			title = ?,
+			description = ?,
+			is_archived = ?,
+			updated_at = ?
+		WHERE slug_index = ?`
+	if err := s.sql.UpdateRecord(
+		qry,
+		updated.Title,
+		updated.Description,
+		updated.IsArchived,
+		updated.UpdatedAt,
+		slugIndex,
+	); err != nil {
+		return fmt.Errorf("failed to update album record '%s': %v", updated.Id, err)
+	}
+
+	// log the update
+	s.logger.Info(fmt.Sprintf("updated album record '%s'", updated.Id))
+
+	return nil
 }

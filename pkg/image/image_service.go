@@ -318,7 +318,7 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 		updated.IsArchived,
 		updated.IsPublished,
 		index); err != nil {
-		return fmt.Errorf("failed to update image record in database: %v", err)
+		return fmt.Errorf("failed to update image record id '%s' in database: %v", existing.Id, err)
 	}
 
 	// if the object key has changed, we need to update the object storage service
