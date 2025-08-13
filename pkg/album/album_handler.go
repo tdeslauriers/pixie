@@ -290,7 +290,7 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if updated.Description != existing.Description {
-		h.logger.Info(fmt.Sprintf("album record description '%s' updated to '%s' by user '%s'", authorized.Claims.Subject))
+		h.logger.Info(fmt.Sprintf("album record description '%s' updated to '%s' by user '%s'", existing.Description, updated.Description, authorized.Claims.Subject))
 	}
 
 	if updated.IsArchived != existing.IsArchived {
