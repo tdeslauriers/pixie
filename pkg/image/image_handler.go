@@ -219,8 +219,6 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	
-
 	// validate the slugs all match:
 	// no risk since the slug will not be overwritten, but good practice to validate
 	// and a good check for tampering with the request overall

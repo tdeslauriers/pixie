@@ -291,8 +291,11 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 		return fmt.Errorf("failed to generate blind index for image slug '%s': %v", updated.Slug, err)
 	}
 
+	// need to encrypt a copy of the updated image record
+	encrypted := *updated
+
 	// encrypt the sensitive fields in the updated image record
-	if err := s.cryptor.EncryptImageRecord(updated); err != nil {
+	if err := s.cryptor.EncryptImageRecord(&encrypted); err != nil {
 		return fmt.Errorf("failed to encrypt updated image data for slug '%s': %v", updated.Slug, err)
 	}
 
@@ -310,13 +313,13 @@ func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord
 		WHERE slug_index = ?`
 	if err := s.sql.UpdateRecord(
 		qry,
-		updated.Title,
-		updated.Description,
-		updated.ObjectKey,
-		updated.ImageDate,
-		updated.UpdatedAt,
-		updated.IsArchived,
-		updated.IsPublished,
+		encrypted.Title,
+		encrypted.Description,
+		encrypted.ObjectKey,
+		encrypted.ImageDate,
+		encrypted.UpdatedAt,
+		encrypted.IsArchived,
+		encrypted.IsPublished,
 		index); err != nil {
 		return fmt.Errorf("failed to update image record id '%s' in database: %v", existing.Id, err)
 	}

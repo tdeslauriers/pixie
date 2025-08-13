@@ -116,7 +116,7 @@ func (ic *imageCryptor) encryptImageFieldData(
 		errCh = make(chan error, 6) // to capture any errors from encryption
 	)
 
-	wg.Add(6)
+	wg.Add(5)
 	go ic.encrypt(*titlePtr, "image title", titleCh, errCh, &wg)
 	go ic.encrypt(*descriptionPtr, "image description", descCh, errCh, &wg)
 	go ic.encrypt(*fileNamePtr, "file name", fnCh, errCh, &wg)
