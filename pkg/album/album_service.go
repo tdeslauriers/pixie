@@ -94,7 +94,7 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 	// convert the permissions map into a variatic slice of interface{}, ie args ...interface{}
 	args := make([]interface{}, 0, len(psMap))
 	// if user is curator, no need to filter by permissions
-	if _, ok := psMap["Gallery Curator"]; !ok {
+	if _, ok := psMap["CURATOR"]; !ok {
 		for _, p := range psMap {
 			args = append(args, p.Id)
 		}
@@ -178,7 +178,7 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 	args := make([]interface{}, 0, len(psMap)+1) // capacity needs to include the slug index
 	args = append(args, slugIndex)               // index in first args position
 	// if user is curator, no need to filter by permissions
-	if _, ok := psMap["Gallery Curator"]; !ok {
+	if _, ok := psMap["CURATOR"]; !ok {
 		// append the permissions uuids to the args slice
 		for _, p := range psMap {
 			args = append(args, p.Id)

@@ -99,7 +99,7 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 			return nil, nil, fmt.Errorf("failed to decrypt permission '%s': %v", record.Id, err)
 		}
 		records[i] = *decrypted
-		psMap[decrypted.Name] = *decrypted
+		psMap[decrypted.Permission] = *decrypted
 	}
 
 	// return the permissions

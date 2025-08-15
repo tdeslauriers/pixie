@@ -96,6 +96,8 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 		return nil, fmt.Errorf("failed to decrypt image record for slug '%s': %v", slug, err)
 	}
 
+	fmt.Printf("Retrieved image record: %+v\n", record)
+
 	// Generate a signed URL for the image from object storage service
 	if record.ObjectKey == "" {
 		return nil, fmt.Errorf("object key for image '%s' is empty", slug)

@@ -188,7 +188,7 @@ func buildAlbumSQuery(ps map[string]permissions.PermissionRecord) (string, error
 
 	// create the where clause based on the permissions uuids AS VARIABLES/PARAMS
 	// Note: curator should see everything, so we don't filter by permissions if present
-	if _, ok := ps["Gallery Curator"]; !ok {
+	if _, ok := ps["CURATOR"]; !ok {
 
 		qb.WriteString(`
 		WHERE ip.permission_uuid IN (`)
@@ -204,7 +204,7 @@ func buildAlbumSQuery(ps map[string]permissions.PermissionRecord) (string, error
 	}
 
 	// check if permissions include 'Gallery Curator'
-	if _, ok := ps["Gallery Curator"]; !ok {
+	if _, ok := ps["CURATOR"]; !ok {
 		// if not, add a condition to filter out albums that are archived
 		qb.WriteString(" AND a.is_archived = FALSE")
 		qb.WriteString(" AND i.is_archived = FALSE")
@@ -286,7 +286,7 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 	qb.WriteString(`
 		WHERE a.slug_index = ?`)
 
-	if _, ok := ps["Gallery Curator"]; !ok {
+	if _, ok := ps["CURATOR"]; !ok {
 		qb.WriteString(`AND ip.permission_uuid IN (`)
 		i := 0
 		for range ps {
@@ -300,7 +300,7 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 	}
 
 	// check if permissions include 'Gallery Curator'
-	if _, ok := ps["Gallery Curator"]; !ok {
+	if _, ok := ps["CURATOR"]; !ok {
 		// if not, add a condition to filter out archived images
 		qb.WriteString(" AND a.is_archived = FALSE")
 		qb.WriteString(" AND i.is_archived = FALSE")
