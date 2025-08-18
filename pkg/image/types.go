@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
+	"github.com/tdeslauriers/pixie/pkg/album"
 )
 
 const (
@@ -167,10 +169,12 @@ func (r *ImageRecord) Validate() error {
 type AddMetaDataCmd struct {
 	Csrf string `json:"csrf,omitempty"` // CSRF token for security
 
-	Title       string `json:"title"`       // Title of the image
-	Description string `json:"description"` // Description of the image
-	FileType    string `json:"file_type"`   // MIME type of the image, eg, "image/jpeg", "image/png"
-	Size        int64  `json:"size"`        // Size of the image file in bytes
+	Title       string                   `json:"title"`                 // Title of the image
+	Description string                   `json:"description"`           // Description of the image
+	FileType    string                   `json:"file_type"`             // MIME type of the image, eg, "image/jpeg", "image/png"
+	Size        int64                    `json:"size"`                  // Size of the image file in bytes
+	Albums      []album.Album            `json:"albums,omitempty"`      // Albums to be associated with the image
+	Permissions []permissions.Permission `json:"permissions,omitempty"` // Permissions to be associated with the image
 }
 
 // Validate checks the AddMetaDataCmd for valid data.
@@ -210,6 +214,26 @@ func (cmd *AddMetaDataCmd) Validate() error {
 	// validate the size
 	if cmd.Size <= 0 || cmd.Size > ImageMaxSize {
 		return fmt.Errorf("image size must be greater than 0 and less than or equal to %d bytes", ImageMaxSize)
+	}
+
+	// validate the albums
+	// adding albums is optional, so only validate if present
+	if len(cmd.Albums) > 0 {
+		for _, album := range cmd.Albums {
+			if err := album.Validate(); err != nil {
+				return fmt.Errorf("invalid album: %v", err)
+			}
+		}
+	}
+
+	// validate the permissions
+	// adding permissions is optional, so only validate if present
+	if len(cmd.Permissions) > 0 {
+		for _, permission := range cmd.Permissions {
+			if err := permission.Validate(); err != nil {
+				return fmt.Errorf("invalid permission: %v", err)
+			}
+		}
 	}
 
 	return nil
