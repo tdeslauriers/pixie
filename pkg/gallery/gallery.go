@@ -18,10 +18,9 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/sign"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/album"
-	"github.com/tdeslauriers/pixie/pkg/image"
 	"github.com/tdeslauriers/pixie/pkg/patron"
 	"github.com/tdeslauriers/pixie/pkg/permission"
+	"github.com/tdeslauriers/pixie/pkg/picture"
 )
 
 // Gallery is the interface for engine that runs this service
@@ -165,8 +164,7 @@ func New(config *config.Config) (Gallery, error) {
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
-		albums:           album.NewService(repository, indexer, cryptor, objStore),
-		images:           image.NewService(repository, indexer, cryptor, objStore),
+		pictures:         picture.NewService(repository, indexer, cryptor, objStore),
 		patrons:          patron.NewService(repository, indexer, cryptor),
 		permissions:      permission.NewService(repository, indexer, cryptor),
 
@@ -188,8 +186,7 @@ type gallery struct {
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
 	identity         connect.S2sCaller
-	albums           album.Service
-	images           image.Service
+	pictures         picture.Service
 	patrons          patron.Service
 	permissions      permission.Service
 
@@ -210,14 +207,13 @@ func (g *gallery) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
-	// album handler
-	alb := album.NewHandler(g.albums, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/albums", alb.HandleAlbums) // handles album listing and creation
-	mux.HandleFunc("/albums/", alb.HandleAlbum) // trailing slash is so slugs can be appended to the path
+	// album handlers
+	pics := picture.NewHandler(g.pictures, g.s2sVerifier, g.iamVerifier)
+	mux.HandleFunc("/albums", pics.HandleAlbums) // handles album listing and creation
+	mux.HandleFunc("/albums/", pics.HandleAlbum) // trailing slash is so slugs can be appended to the path
 
-	// image handler
-	img := image.NewHandler(g.images, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/images/", img.HandleImage) // trailing slash is so slugs can be appended to the path
+	// image handlers
+	mux.HandleFunc("/images/", pics.HandleImage) // trailing slash is so slugs can be appended to the path
 
 	// patron handler
 	pat := patron.NewHandler(g.patrons, g.s2sVerifier, g.iamVerifier)

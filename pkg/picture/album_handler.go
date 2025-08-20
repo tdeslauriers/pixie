@@ -1,4 +1,4 @@
-package album
+package picture
 
 import (
 	"encoding/json"
@@ -11,6 +11,8 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
 // scopes required to interact with the album handler(s) endpoints
@@ -20,7 +22,7 @@ var (
 )
 
 // Handler is an interface that defines methods for handling album-related requests.
-type Handler interface {
+type AlbumHandler interface {
 
 	// HandleAlbum handles requests related to a specific album.
 	HandleAlbum(w http.ResponseWriter, r *http.Request)
@@ -30,8 +32,8 @@ type Handler interface {
 }
 
 // NewHandler creates a new Handler instance and returns a pointer to the concrete implementation.
-func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
-	return &handler{
+func NewAlbumHandler(s Service, s2s, iam jwt.Verifier) AlbumHandler {
+	return &albumHandler{
 		svc: s,
 		s2s: s2s,
 		iam: iam,
@@ -39,14 +41,14 @@ func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
 			With(slog.String(util.ComponentKey, util.ComponentAlbumHandler)).
-			With(slog.String(util.PackageKey, util.PackageAlbum)),
+			With(slog.String(util.PackageKey, util.PackagePicture)),
 	}
 }
 
-var _ Handler = (*handler)(nil)
+var _ AlbumHandler = (*albumHandler)(nil)
 
 // handler is the concrete implementation of the Handler interface.
-type handler struct {
+type albumHandler struct {
 	svc Service
 	s2s jwt.Verifier
 	iam jwt.Verifier // inherently nil because this will come from registration -> s2s
@@ -56,7 +58,7 @@ type handler struct {
 
 // HandleAlbum is the concrete implementation of the interface method which handles album-related requests
 // for a specific album.
-func (h *handler) HandleAlbum(w http.ResponseWriter, r *http.Request) {
+func (h *albumHandler) HandleAlbum(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
@@ -80,7 +82,7 @@ func (h *handler) HandleAlbum(w http.ResponseWriter, r *http.Request) {
 
 // HandleAlbums is the concrete implementation of the interface method which handles album-related requests.
 // It will handle the request logic, including validation and persistence of album records.
-func (h *handler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
+func (h *albumHandler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
@@ -100,7 +102,7 @@ func (h *handler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleActiveAlbums handles the retrieval of all album records a user has permission to view.
-func (h *handler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
+func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -143,7 +145,7 @@ func (h *handler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetAlbum handles the retrieval of a specific album record.
-func (h *handler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
+func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -198,7 +200,7 @@ func (h *handler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateAlbum handles the update of an existing album record.
-func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
+func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -228,7 +230,7 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// decode the request body into an cmd record
-	var cmd AlbumUpdateCmd
+	var cmd api.AlbumUpdateCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error("Failed to decode album record", slog.Any("error", err))
 		e := connect.ErrorHttp{
@@ -264,7 +266,7 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// build the updated album record
 	// only certain fields can be updated; other fields are immutable and will be ignored
-	updated := AlbumRecord{
+	updated := db.AlbumRecord{
 		Id:          existing.Id, // immutable
 		Title:       cmd.Title,
 		Description: cmd.Description,
@@ -302,7 +304,7 @@ func (h *handler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateAlbum handles the creation of a new album record.
-func (h *handler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
+func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -320,7 +322,7 @@ func (h *handler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// decode the request body into an cmd record
-	var cmd AddAlbumCmd
+	var cmd api.AddAlbumCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error("Failed to decode album record", slog.Any("error", err))
 		e := connect.ErrorHttp{
@@ -359,7 +361,7 @@ func (h *handler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info(fmt.Sprintf("album record '%s' created by user '%s'", created.Title, authorized.Claims.Subject))
 
 	// build the response
-	response := Album{
+	response := api.Album{
 		Id:          created.Id,
 		Title:       created.Title,
 		Description: created.Description,

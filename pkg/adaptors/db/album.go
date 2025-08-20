@@ -1,4 +1,4 @@
-package album
+package db
 
 import (
 	"fmt"
@@ -7,58 +7,8 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
-	"github.com/tdeslauriers/pixie/pkg/image"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
-
-const (
-	TitleMinLength = 2                          // Minimum length for image title
-	TitleMaxLength = 32                         // Maximum length for image title
-	TitleRegex     = `^[a-zA-Z0-9\-\/ ]{1,32}$` // Regex for image title, alphanumeric, spaces, max 64 chars
-
-	DescriptionMinLength = 3                           // Minimum length for image description
-	DescriptionMaxLength = 255                         // Maximum length for image description
-	DescriptionRegex     = `^[\w\s.,!?'"()&-]{0,255}$` // Regex for image description, allows alphanumeric, spaces, punctuation, max 255 chars
-
-	ImageMaxSize = 10 * 1024 * 1024 // Maximum size for image file, 10 MB
-)
-
-// AddAlbumCmd is a a model which represents the command to add a new album record.
-type AddAlbumCmd struct {
-	Csrf string `json:"csrf"`
-
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	IsArchived  bool   `json:"is_archived"`
-}
-
-// Validate validates the AddAlbumCmd -> input validation.
-func (cmd *AddAlbumCmd) Validate() error {
-
-	// validate CSRF token, if present -> not always required
-	if cmd.Csrf != "" && !validate.IsValidUuid(cmd.Csrf) {
-		return fmt.Errorf("invalid CSRF token")
-	}
-
-	// validate title
-	if cmd.Title == "" {
-		return fmt.Errorf("title is required")
-	}
-
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), TitleRegex) {
-		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
-	}
-
-	// validate description
-	if cmd.Description == "" {
-		return fmt.Errorf("description is required")
-	}
-
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), DescriptionRegex) {
-		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
-	}
-
-	return nil
-}
 
 // AlbumRecord is a model which represents an album record in the database.
 type AlbumRecord struct {
@@ -85,8 +35,8 @@ func (a *AlbumRecord) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(a.Title), TitleRegex) {
-		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
+	if !validate.MatchesRegex(strings.TrimSpace(a.Title), api.AlbumTitleRegex) {
+		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", api.AlbumTitleMinLength, api.AlbumTitleMaxLength)
 	}
 
 	// validate description
@@ -94,8 +44,8 @@ func (a *AlbumRecord) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(a.Description), DescriptionRegex) {
-		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
+	if !validate.MatchesRegex(strings.TrimSpace(a.Description), api.AlbumDescriptionRegex) {
+		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", api.AlbumDescriptionMinLength, api.AlbumDescriptionMaxLength)
 	}
 
 	// validate slug if present
@@ -106,63 +56,10 @@ func (a *AlbumRecord) Validate() error {
 	return nil
 }
 
-// Album is a model which represents an album in the API response.
-type Album struct {
-	Csrf        string            `json:"csrf,omitempty"` // CSRF token, if required, or if present
-	Id          string            `json:"id,omitempty"`
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	Slug        string            `json:"slug,omitempty"`
-	CreatedAt   data.CustomTime   `json:"created_at,omitempty"`
-	UpdatedAt   data.CustomTime   `json:"updated_at,omitempty"`
-	IsArchived  bool              `json:"is_archived"`
-	SignedUrl   string            `json:"signed_url,omitempty"` // URL to the cover image, if any
-	Images      []image.ImageData `json:"images,omitempty"`     // image metadata records + their thumbnails signed urls
-}
-
-// Validate validates the Album -> input validation.
-func (a *Album) Validate() error {
-
-	// if csrf is present, validate it
-	if a.Csrf != "" && !validate.IsValidUuid(a.Csrf) {
-		return fmt.Errorf("invalid CSRF token")
-	}
-
-	// validate id
-	if !validate.IsValidUuid(a.Id) {
-		return fmt.Errorf("invalid album Id: %s", a.Id)
-	}
-
-	// validate title
-	if a.Title == "" {
-		return fmt.Errorf("title is required")
-	}
-
-	if !validate.MatchesRegex(strings.TrimSpace(a.Title), TitleRegex) {
-		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
-	}
-
-	// validate description
-	if a.Description == "" {
-		return fmt.Errorf("description is required")
-	}
-
-	if !validate.MatchesRegex(strings.TrimSpace(a.Description), DescriptionRegex) {
-		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
-	}
-
-	// validate slug
-	if !validate.IsValidUuid(a.Slug) {
-		return fmt.Errorf("invalid slug: %s", a.Slug)
-	}
-
-	return nil
-}
-
-// buildAlbumSQuery is a helper function which builds a query to
+// BuildAlbumSQuery is a helper function which builds a query to
 // retrieve album records based on the user's permissions.
 // It uses the provided permissions map to create the query params.
-func buildAlbumSQuery(ps map[string]permissions.PermissionRecord) (string, error) {
+func BuildAlbumSQuery(ps map[string]permissions.PermissionRecord) (string, error) {
 
 	// check for empty permissions map
 	if len(ps) == 0 {
@@ -241,9 +138,9 @@ type AlbumImageRecord struct {
 	ImageIsPublished bool            `db:"image_is_published"` // Indicates if the image is published and visible to users
 }
 
-// buildAlbumImagesQuery is a helper function which builds a query to
+// BuildAlbumImagesQuery is a helper function which builds a query to
 // retrieve image records for a specific album based on the user's permissions.
-func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, error) {
+func BuildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, error) {
 
 	// check for empty permissions map
 	if len(ps) == 0 {
@@ -308,40 +205,4 @@ func buildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 	}
 
 	return qb.String(), nil
-}
-
-// AlbumUpdateCmd is a model which represents the command to update an existing album record.
-type AlbumUpdateCmd struct {
-	Csrf        string `json:"csrf,omitempty"` // this may not always be required
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	IsArchived  bool   `json:"is_archived"`
-}
-
-func (cmd *AlbumUpdateCmd) Validate() error {
-
-	// validate CSRF token, if present -> not always required
-	if cmd.Csrf != "" && !validate.IsValidUuid(cmd.Csrf) {
-		return fmt.Errorf("invalid CSRF token")
-	}
-
-	// validate title
-	if cmd.Title == "" {
-		return fmt.Errorf("title is required")
-	}
-
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), TitleRegex) {
-		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", TitleMinLength, TitleMaxLength)
-	}
-
-	// validate description
-	if cmd.Description == "" {
-		return fmt.Errorf("description is required")
-	}
-
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), DescriptionRegex) {
-		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", DescriptionMinLength, DescriptionMaxLength)
-	}
-
-	return nil
 }

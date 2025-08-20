@@ -1,4 +1,4 @@
-package album
+package picture
 
 import (
 	"database/sql"
@@ -14,53 +14,55 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/image"
+	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
+	"github.com/tdeslauriers/pixie/pkg/crypt"
 	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
-// Service is an interface for methods that manage album records.
-type Service interface {
+// AlbumService is an interface for methods that manage album records.
+type AlbumService interface {
 
 	// GetAllowedAlbums returns a list of albums that the user is allowed to view based on their permissions.
-	GetAllowedAlbums(username string) ([]AlbumRecord, error)
+	GetAllowedAlbums(username string) ([]db.AlbumRecord, error)
 
 	// GetAlbum returns a specific album record by its slug, and
 	// a slice of the thumbnail images for the album.
 	// Note: username is required to check permissions for each of the album's associated images.
-	GetAlbumBySlug(slug, username string) (*Album, error)
+	GetAlbumBySlug(slug, username string) (*api.Album, error)
 
 	// CreateAlbum creates a new album record in the database, ecrypots sensitive fields, and
 	// returns a pointer to the created album record,
 	// or returns an error if the creation fails.
-	CreateAlbum(album AddAlbumCmd) (*AlbumRecord, error)
+	CreateAlbum(album api.AddAlbumCmd) (*db.AlbumRecord, error)
 
 	// UpdateAlbum updates an existing album record in the database.
-	UpdateAlbum(updated AlbumRecord) error
+	UpdateAlbum(updated db.AlbumRecord) error
 }
 
-// NewService creates a new album service and provides a pointer to a concrete implementation.
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, o storage.ObjectStorage) Service {
-	return &service{
+// NewAlbumService creates a new album service and provides a pointer to a concrete implementation.
+func NewAlbumService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, o storage.ObjectStorage) AlbumService {
+	return &albumService{
 		sql:     sql,
 		indexer: i,
-		cryptor: NewCryptor(c),
+		cryptor: crypt.NewCryptor(c),
 		perms:   permission.NewService(sql, i, c),
 		store:   o,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
 			With(slog.String(util.ComponentKey, util.ComponentAlbumSerivce)).
-			With(slog.String(util.PackageKey, util.PackageAlbum)),
+			With(slog.String(util.PackageKey, util.PackagePicture)),
 	}
 }
 
-var _ Service = (*service)(nil)
+var _ AlbumService = (*albumService)(nil)
 
-// service implements the Service interface for managing album records.
-type service struct {
+// albumService implements the Service interface for managing album records.
+type albumService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
-	cryptor Cryptor // album data specific wrapper around data.Cryptor
+	cryptor crypt.Cryptor
 	perms   permission.Service
 	store   storage.ObjectStorage
 
@@ -71,7 +73,7 @@ type service struct {
 // this method must consider the users permissions, and
 // the images attached to the albums premissions and only return an album if the user is
 // authorized to view at least one image in the album.
-func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
+func (s *albumService) GetAllowedAlbums(username string) ([]db.AlbumRecord, error) {
 
 	// validate the username
 	// redundant check, but good practice
@@ -86,7 +88,7 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 	}
 
 	// build album query based on permissions
-	qry, err := buildAlbumSQuery(psMap)
+	qry, err := db.BuildAlbumSQuery(psMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build album permission query: %v", err)
 	}
@@ -100,10 +102,10 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 		}
 	}
 
-	var albums []AlbumRecord
+	var albums []db.AlbumRecord
 	if err := s.sql.SelectRecords(qry, &albums, args...); err != nil {
 		if err == sql.ErrNoRows {
-			return []AlbumRecord{}, nil
+			return []db.AlbumRecord{}, nil
 		} else {
 			return nil, fmt.Errorf("failed to retrieve albums for user '%s': %v", username, err)
 		}
@@ -115,7 +117,7 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 
 	for i := range albums {
 		wg.Add(1)
-		go func(a *AlbumRecord) {
+		go func(a *db.AlbumRecord) {
 			defer wg.Done()
 			if err := s.cryptor.DecryptAlbumRecord(a); err != nil {
 				errCh <- fmt.Errorf("failed to decrypt album record '%s': %v", a.Id, err)
@@ -144,7 +146,7 @@ func (s *service) GetAllowedAlbums(username string) ([]AlbumRecord, error) {
 
 // GetAlbumBySlug implements the Service interface method to retrieve a specific album record by its slug.
 // It also retrieves a slice of the thumbnail images for the album.
-func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
+func (s *albumService) GetAlbumBySlug(slug, username string) (*api.Album, error) {
 
 	// vadidate the slug and the username
 	// redundant check, but good practice
@@ -169,7 +171,7 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 	}
 
 	// build the album query
-	qry, err := buildAlbumImagesQuery(psMap)
+	qry, err := db.BuildAlbumImagesQuery(psMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create query for album slug %s", slug)
 	}
@@ -185,7 +187,7 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 		}
 	}
 
-	var records []AlbumImageRecord
+	var records []db.AlbumImageRecord
 	if err := s.sql.SelectRecords(qry, &records, args...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to find images user '%s' has permission to view in this album", username)
@@ -200,7 +202,7 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 	}
 
 	// build the album modelfrom the first record
-	album := &Album{
+	album := &api.Album{
 		Id:          records[0].AlbumId,
 		Title:       records[0].AlbumTitle,
 		Description: records[0].AlbumDescription,
@@ -232,26 +234,26 @@ func (s *service) GetAlbumBySlug(slug, username string) (*Album, error) {
 
 // buildImageData takes the fields from a AlbumImageRecords and builds an slice of decrypted ImageData structs
 // with presigned URLs for the thumbnail images.
-func (s *service) buildImageData(records []AlbumImageRecord) ([]image.ImageData, error) {
+func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.ImageData, error) {
 
 	// chack that records slice is not empty
 	if len(records) == 0 {
-		return []image.ImageData{}, nil
+		return []api.ImageData{}, nil
 	}
 
 	// build the image data slice
-	images := make([]image.ImageData, len(records))
+	images := make([]api.ImageData, len(records))
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(records))
 
 	for i, r := range records {
 		wg.Add(1)
-		go func(i int, r AlbumImageRecord) {
+		go func(i int, r db.AlbumImageRecord) {
 			defer wg.Done()
 
 			// build the image data struct
-			img := &image.ImageData{
+			img := &api.ImageData{
 				Id:          r.ImageId,
 				Title:       r.ImageTitle,
 				Description: r.ImageDescription,
@@ -320,7 +322,7 @@ func (s *service) buildImageData(records []AlbumImageRecord) ([]image.ImageData,
 }
 
 // CreateAlbum implements the Service interface method to create a new album record in the database.
-func (s *service) CreateAlbum(cmd AddAlbumCmd) (*AlbumRecord, error) {
+func (s *albumService) CreateAlbum(cmd api.AddAlbumCmd) (*db.AlbumRecord, error) {
 
 	// validate the album add cmd
 	// redundant check, but good practice
@@ -352,7 +354,7 @@ func (s *service) CreateAlbum(cmd AddAlbumCmd) (*AlbumRecord, error) {
 
 	// build  album record
 
-	album := &AlbumRecord{
+	album := &db.AlbumRecord{
 		Id:          id.String(),
 		Title:       cmd.Title,
 		Description: cmd.Description,
@@ -396,7 +398,7 @@ func (s *service) CreateAlbum(cmd AddAlbumCmd) (*AlbumRecord, error) {
 }
 
 // UpdateAlbum updates an existing album record in the database.
-func (s *service) UpdateAlbum(updated AlbumRecord) error {
+func (s *albumService) UpdateAlbum(updated db.AlbumRecord) error {
 
 	// validate the updated album record
 	// redundant check, but good practice
