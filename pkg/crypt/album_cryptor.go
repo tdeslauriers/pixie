@@ -1,4 +1,4 @@
-package album
+package crypt
 
 import (
 	"errors"
@@ -8,45 +8,24 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/image"
+	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
-
-// is an interface aggregating the album cryptor methods and the image cryptor methods
-type Cryptor interface {
-	AlbumCryptor
-	image.Cryptor
-}
-
-// NewCryptor creates a new instance of the interface aggregator Cryptor,
-// returning a pointer to the concrete implementation(s)
-func NewCryptor(c data.Cryptor) Cryptor {
-	return &cryptor{
-		AlbumCryptor: NewAlbumCryptor(c),
-		Cryptor:      image.NewCryptor(c),
-	}
-}
-
-var _ Cryptor = (*cryptor)(nil)
-
-type cryptor struct {
-	AlbumCryptor
-	image.Cryptor
-}
 
 // EncryptAlbumRecord encrypts sensitive fields in the album related structs.
 type AlbumCryptor interface {
 
 	// EncryptAlbumRecord encrypts sensitive fields in the AlbumRecord struct.
-	EncryptAlbumRecord(a *AlbumRecord) error
+	EncryptAlbumRecord(a *db.AlbumRecord) error
 
 	// EncryptAlbum encrypts sensitive fields in the Album struct.
-	EncryptAlbum(a *Album) error
+	EncryptAlbum(a *api.Album) error
 
 	// DecryptAlbumRecord decrypts sensitive fields in the AlbumRecord struct.
-	DecryptAlbumRecord(a *AlbumRecord) error
+	DecryptAlbumRecord(a *db.AlbumRecord) error
 
 	// DecryptAlbum decrypts sensitive fields in the Album struct.
-	DecryptAlbum(a *Album) error
+	DecryptAlbum(a *api.Album) error
 }
 
 // NewAlbumCryptor creates a new AlbumCryptor instance, returning a pointer to the concrete implementation.
@@ -55,7 +34,7 @@ func NewAlbumCryptor(c data.Cryptor) AlbumCryptor {
 		cryptor: c,
 
 		logger: slog.Default().
-			With(slog.String(util.PackageKey, util.PackageAlbum)).
+			With(slog.String(util.PackageKey, util.PackageService)).
 			With(slog.String(util.ComponentKey, util.ComponentAlbumCryptor)).
 			With(slog.String(util.ServiceKey, util.ServiceGallery)),
 	}
@@ -75,7 +54,7 @@ type albumCryptor struct {
 // EncryptAlbumRecord is a wrapper function around the generalized
 // field encryption function, encryptAlbumFields,
 // that encrypts the sensitive fields in the album record struct.
-func (ac *albumCryptor) EncryptAlbumRecord(a *AlbumRecord) error {
+func (ac *albumCryptor) EncryptAlbumRecord(a *db.AlbumRecord) error {
 	if a == nil {
 		return fmt.Errorf("album record cannot be nil")
 	}
@@ -87,7 +66,7 @@ func (ac *albumCryptor) EncryptAlbumRecord(a *AlbumRecord) error {
 // EncryptAlbum is a wrapper funciton arournd the generalized
 // field encryption function, encryptAlbumFields, which
 // encrypts sensitive fields in the Album struct.
-func (ac *albumCryptor) EncryptAlbum(a *Album) error {
+func (ac *albumCryptor) EncryptAlbum(a *api.Album) error {
 	if a == nil {
 		return fmt.Errorf("album cannot be nil")
 	}
@@ -182,7 +161,7 @@ func (ac *albumCryptor) encrypt(field, plaintext string, fieldCh chan string, er
 }
 
 // decryptAlbumRecord is a wrapper function for decrypting sensitive fields in the AlbumRecord struct.
-func (ac *albumCryptor) DecryptAlbumRecord(a *AlbumRecord) error {
+func (ac *albumCryptor) DecryptAlbumRecord(a *db.AlbumRecord) error {
 	if a == nil {
 		return fmt.Errorf("album record cannot be nil")
 	}
@@ -195,7 +174,7 @@ func (ac *albumCryptor) DecryptAlbumRecord(a *AlbumRecord) error {
 }
 
 // decryptAlbum is a wrapper function which decrypts the sensitive fields in the Album struct.
-func (ac *albumCryptor) DecryptAlbum(a *Album) error {
+func (ac *albumCryptor) DecryptAlbum(a *api.Album) error {
 	if a == nil {
 		return fmt.Errorf("album cannot be nil")
 	}

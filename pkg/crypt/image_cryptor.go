@@ -1,4 +1,4 @@
-package image
+package crypt
 
 import (
 	"fmt"
@@ -8,37 +8,39 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
-// Cryptor is the interface for encrypting and decrypting image data.
-type Cryptor interface {
+// ImageCryptor is the interface for encrypting and decrypting image specific data fields.
+type ImageCryptor interface {
 
 	// EncryptImageRecord encrypts sensitive fields in the ImageRecord struct.
-	EncryptImageRecord(image *ImageRecord) error
+	EncryptImageRecord(image *db.ImageRecord) error
 
 	// EncryptImageData encrypts sensitive fields in the ImageData struct.
-	EncryptImageData(image *ImageData) error
+	EncryptImageData(image *api.ImageData) error
 
 	// DecryptImageData decrypts sensitive fields in the ImageData struct.
-	DecryptImageData(image *ImageData) error
+	DecryptImageData(image *api.ImageData) error
 
 	// DecryptImageRecord decrypts sensitive fields in the ImageRecord struct.
-	DecryptImageRecord(image *ImageRecord) error
+	DecryptImageRecord(image *db.ImageRecord) error
 }
 
 // NewCryptor creates a new ImageCryptor instance, returning a pointer to the concrete implementation.
-func NewCryptor(c data.Cryptor) Cryptor {
+func NewImageCryptor(c data.Cryptor) ImageCryptor {
 	return &imageCryptor{
 		cryptor: c,
 
 		logger: slog.Default().
-			With(slog.String(util.PackageKey, util.PackageImage)).
+			With(slog.String(util.PackageKey, util.PackageService)).
 			With(slog.String(util.ComponentKey, util.ComponentImageCryptor)).
 			With(slog.String(util.ServiceKey, util.ServiceGallery)),
 	}
 }
 
-var _ Cryptor = (*imageCryptor)(nil)
+var _ ImageCryptor = (*imageCryptor)(nil)
 
 // imageCryptor is the concrete implementation of the Cryptor interface, which
 // is a wrapper around the data.Cryptor interface from carapace, providing
@@ -50,7 +52,7 @@ type imageCryptor struct {
 }
 
 // EncryptImageRecord encrypts sensitive fields in the ImageRecord struct.
-func (ic *imageCryptor) EncryptImageRecord(image *ImageRecord) error {
+func (ic *imageCryptor) EncryptImageRecord(image *db.ImageRecord) error {
 	if image == nil {
 		return fmt.Errorf("image record cannot be nil")
 	}
@@ -71,7 +73,7 @@ func (ic *imageCryptor) EncryptImageRecord(image *ImageRecord) error {
 }
 
 // EncryptImageData encrypts sensitive fields in the ImageData struct.
-func (ic *imageCryptor) EncryptImageData(image *ImageData) error {
+func (ic *imageCryptor) EncryptImageData(image *api.ImageData) error {
 
 	if image == nil {
 		return fmt.Errorf("image data cannot be nil")
@@ -211,7 +213,7 @@ func (ic *imageCryptor) encrypt(plaintext, fieldname string, encCh chan string, 
 }
 
 // DecryptImageData is a wrapper function that decrypts sensitive fields in the ImageData struct.
-func (ic *imageCryptor) DecryptImageData(image *ImageData) error {
+func (ic *imageCryptor) DecryptImageData(image *api.ImageData) error {
 	if image == nil {
 		return fmt.Errorf("image data cannot be nil")
 	}
@@ -232,7 +234,7 @@ func (ic *imageCryptor) DecryptImageData(image *ImageData) error {
 }
 
 // DecryptImageRecord is a wrapper function that decrypts sensitive fields in the ImageRecord struct.
-func (ic *imageCryptor) DecryptImageRecord(image *ImageRecord) error {
+func (ic *imageCryptor) DecryptImageRecord(image *db.ImageRecord) error {
 	if image == nil {
 		return fmt.Errorf("image record cannot be nil")
 	}

@@ -1,4 +1,4 @@
-package image
+package picture
 
 import (
 	"encoding/json"
@@ -12,6 +12,8 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
 var (
@@ -21,27 +23,27 @@ var (
 
 // Handler is the interface for image processing service handlers.
 // It defines the methods that any image handler must implement to process image requests.
-type Handler interface {
+type ImageHandler interface {
 
 	// HandleImage handles the image processing request
 	HandleImage(w http.ResponseWriter, r *http.Request)
 }
 
 // NewHandler creates a new image handler instance, returning a pointer to the concrete implementation.
-func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
+func NewImageHandler(s Service, s2s, iam jwt.Verifier) ImageHandler {
 	return &imageHandler{
 		svc: s,
 		s2s: s2s,
 		iam: iam,
 
 		logger: slog.Default().
-			With(slog.String(util.PackageKey, util.PackageImage)).
+			With(slog.String(util.PackageKey, util.PackagePicture)).
 			With(slog.String(util.ComponentKey, util.ComponentImage)).
 			With(slog.String(util.ServiceKey, util.ServiceGallery)),
 	}
 }
 
-var _ Handler = (*imageHandler)(nil)
+var _ ImageHandler = (*imageHandler)(nil)
 
 // imageHandler is a concrete implementation of the Handler interface.
 type imageHandler struct {
@@ -185,7 +187,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	}
 
 	// get update data from the request body
-	var cmd UpdateMetadataCmd
+	var cmd api.UpdateMetadataCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error(fmt.Sprintf("/images/slug handler failed to decode request body: %v", err))
 		e := connect.ErrorHttp{
@@ -251,7 +253,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 
 	// build image record that are allowed to be updated
 	// Note: more fields can be added here as needed
-	updated := &ImageRecord{
+	updated := &db.ImageRecord{
 		Id:          existing.Id, // id should not change
 		Title:       cmd.Title,
 		Description: cmd.Description,
@@ -326,14 +328,15 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 
 	// validate iam token
 	accessToken := r.Header.Get("Authorization")
-	if _, err := h.iam.BuildAuthorized(writeImagesAllowed, accessToken); err != nil {
+	authorized, err := h.iam.BuildAuthorized(writeImagesAllowed, accessToken)
+	if err != nil {
 		h.logger.Error(fmt.Sprintf("/images/ handler failed to authorize iam token: %v", err))
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
 
 	// decode the request body into the AddMetaDataCmd struct
-	var cmd AddMetaDataCmd
+	var cmd api.AddMetaDataCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		h.logger.Error(fmt.Sprintf("/images/ handler failed to decode request body: %v", err))
 		e := connect.ErrorHttp{
@@ -368,7 +371,19 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// TODO: add the pre-added album mappings from the upload command. --> may also included adding album record.
+	// add the pre-added album mappings from the upload command.
+	// get all existing albums
+	allAlbums, err := h.svc.GetAllowedAlbums(authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("/images/ handler failed to get allowed albums for user '%s': %v", authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "internal server error fetching albums",
+		}
+		e.SendJsonErr(w)
+		return		
+	}
+
 	// TODO: add the pre-added permissions tags from the upload command.
 
 	h.logger.Info(fmt.Sprintf("/images/ handler successfully created placeholder image record with id %s", placeholder.Id))

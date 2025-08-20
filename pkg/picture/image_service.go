@@ -1,4 +1,4 @@
-package image
+package picture
 
 import (
 	"fmt"
@@ -10,46 +10,49 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
+	"github.com/tdeslauriers/pixie/pkg/crypt"
 )
 
-// Service is the interface for the image processing service.
+// ImageService is the interface for the image processing service.
 // It defines methods that any image service must implement to handle image processing tasks.
 // For example, fetching image db data and requesting signed URLs from the object storage service.
-type Service interface {
+type ImageService interface {
 	// GetImageData retrieves image data from the database along with a signed URL for the image.
-	GetImageData(slug string) (*ImageData, error)
+	GetImageData(slug string) (*api.ImageData, error)
 
 	// UpdateImageData updates an existing image record in the database.
-	UpdateImageData(existing *ImageData, updated *ImageRecord) error
+	UpdateImageData(existing *api.ImageData, updated *db.ImageRecord) error
 
 	// BuildPlaceholder builds the metadata for a placeholder image record.
 	// eg, the id, slug, title, and description provided by the user.
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
-	BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error)
+	BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData, error)
 }
 
-// NewService creates a new image service instance, returning a pointer to the concrete implementation.
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj storage.ObjectStorage) Service {
+// NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
+func NewImageService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj storage.ObjectStorage) ImageService {
 	return &imageService{
 		sql:     sql,
 		indexer: i,
-		cryptor: NewCryptor(c),
+		cryptor: crypt.NewCryptor(c),
 		store:   obj,
 
 		logger: slog.Default().
-			With(slog.String(util.PackageKey, util.PackageImage)).
+			With(slog.String(util.PackageKey, util.PackagePicture)).
 			With(slog.String(util.ComponentKey, util.ComponentImage)).
 			With(slog.String(util.ServiceKey, util.ServiceGallery)),
 	}
 }
 
-var _ Service = (*imageService)(nil)
+var _ ImageService = (*imageService)(nil)
 
 type imageService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
-	cryptor Cryptor // image data specific wrapper around data.Cryptor
+	cryptor crypt.Cryptor // image data specific wrapper around data.Cryptor
 	store   storage.ObjectStorage
 
 	logger *slog.Logger
@@ -57,7 +60,7 @@ type imageService struct {
 
 // GetImageData is the concrete implementation of the interface method which
 // retrieves image data from the database along with a signed URL for the image.
-func (s *imageService) GetImageData(slug string) (*ImageData, error) {
+func (s *imageService) GetImageData(slug string) (*api.ImageData, error) {
 
 	// get blind index for the slug
 	index, err := s.indexer.ObtainBlindIndex(slug)
@@ -86,7 +89,7 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 			is_published 
 		FROM image 
 		WHERE slug_index = ?`
-	var record ImageRecord
+	var record db.ImageRecord
 	if err := s.sql.SelectRecord(qry, &record, index); err != nil {
 		return nil, fmt.Errorf("failed to select image record for slug '%s': %v", slug, err)
 	}
@@ -116,7 +119,7 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 	}
 
 	// create the ImageData struct to return
-	image := &ImageData{
+	image := &api.ImageData{
 		Id:          record.Id,
 		Title:       record.Title,
 		Description: record.Description,
@@ -142,7 +145,7 @@ func (s *imageService) GetImageData(slug string) (*ImageData, error) {
 // BuildPlaceholder is the concrete implementation of the interface method which
 // builds the metadata for a placeholder image from an add image cmd.
 // The image processing pipeline will build the rest of the record upon ingestion of the image file.
-func (s *imageService) BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error) {
+func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData, error) {
 
 	// validate the created metadata
 	// should be a redundant check, but good practice
@@ -179,7 +182,7 @@ func (s *imageService) BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error) 
 
 	// incomplete/stubbed image record missing fields that will be filled in later
 	// when the image file is processed and the object storage service notifies the image service
-	record := ImageRecord{
+	record := db.ImageRecord{
 		Id:          id.String(),
 		Title:       strings.TrimSpace(cmd.Title),
 		Description: strings.TrimSpace(cmd.Description),
@@ -244,7 +247,7 @@ func (s *imageService) BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error) 
 	}
 
 	// build image meta data struct to return
-	data := &ImageData{
+	data := &api.ImageData{
 		Id:          record.Id,
 		Title:       record.Title,
 		Description: record.Description,
@@ -266,7 +269,7 @@ func (s *imageService) BuildPlaceholder(cmd AddMetaDataCmd) (*ImageData, error) 
 // updates an existing image record in the database.
 // NOTE: the only reason existing is passed is so that we check if the ojbectstore needs to be updated
 // due to a new ojbect key being generated.
-func (s *imageService) UpdateImageData(existing *ImageData, updated *ImageRecord) error {
+func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.ImageRecord) error {
 
 	// validate updated image record
 	// redundant check, but good practice

@@ -5,11 +5,11 @@ const (
 	PackageKey = "package"
 
 	PackageMain        = "main"
-	PackageAlbum       = "album"
 	PackageGallery     = "gallery"
-	PackageImage       = "image"
 	PackagePatron      = "patron"
+	PackagePicture     = "picture"
 	PackagePermissions = "permissions"
+	PackageService     = "service"
 
 	// component keys
 	ComponentKey = "component"
