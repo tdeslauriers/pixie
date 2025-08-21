@@ -4,6 +4,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/carapace/pkg/storage"
+	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 // Service is an aggregate interface that combines all picture-related services.
@@ -34,10 +35,10 @@ type Handler interface {
 }
 
 // NewHandler creates a new Handler instance and returns a pointer to the concrete implementation.
-func NewHandler(s Service, s2s, iam jwt.Verifier) Handler {
+func NewHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) Handler {
 	return &handler{
-		AlbumHandler: NewAlbumHandler(s, s2s, iam),
-		ImageHandler: NewImageHandler(s, s2s, iam),
+		AlbumHandler: NewAlbumHandler(s, p, s2s, iam),
+		ImageHandler: NewImageHandler(s, p, s2s, iam),
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
+	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 // scopes required to interact with the album handler(s) endpoints
@@ -32,11 +33,12 @@ type AlbumHandler interface {
 }
 
 // NewHandler creates a new Handler instance and returns a pointer to the concrete implementation.
-func NewAlbumHandler(s Service, s2s, iam jwt.Verifier) AlbumHandler {
+func NewAlbumHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) AlbumHandler {
 	return &albumHandler{
-		svc: s,
-		s2s: s2s,
-		iam: iam,
+		svc:   s,
+		perms: p,
+		s2s:   s2s,
+		iam:   iam,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -49,9 +51,10 @@ var _ AlbumHandler = (*albumHandler)(nil)
 
 // handler is the concrete implementation of the Handler interface.
 type albumHandler struct {
-	svc Service
-	s2s jwt.Verifier
-	iam jwt.Verifier // inherently nil because this will come from registration -> s2s
+	svc   Service
+	perms permission.Service
+	s2s   jwt.Verifier
+	iam   jwt.Verifier // inherently nil because this will come from registration -> s2s
 
 	logger *slog.Logger
 }
@@ -119,7 +122,19 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	albums, err := h.svc.GetAllowedAlbums(authorized.Claims.Subject)
+	// get the user's permissions
+	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to retrieve permissions for user '%s': %v", authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to retrieve permissions",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	_, albums, err := h.svc.GetAllowedAlbums(ps)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to retrieve albums for user '%s': %v", authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{
@@ -174,8 +189,20 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// get the user's permissions
+	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to retrieve permissions for user '%s': %v", authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to retrieve permissions",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
 	// retrieve the album record
-	album, err := h.svc.GetAlbumBySlug(slug, authorized.Claims.Subject)
+	album, err := h.svc.GetAlbumBySlug(slug, ps)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to retrieve album '%s' for user '%s': %v", slug, authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{
@@ -252,8 +279,20 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// get the user's permissions
+	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("Failed to retrieve permissions for user '%s': %v", authorized.Claims.Subject, err))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "Failed to retrieve permissions",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
 	// lookup the existing album record to ensure it exists
-	existing, err := h.svc.GetAlbumBySlug(slug, authorized.Claims.Subject)
+	existing, err := h.svc.GetAlbumBySlug(slug, ps)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to retrieve existing album '%s' for user '%s': %v", slug, authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{

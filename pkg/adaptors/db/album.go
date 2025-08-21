@@ -206,3 +206,11 @@ func BuildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 
 	return qb.String(), nil
 }
+
+// AlbumImageXref is a model which represents a record in the album_image cross-reference table.
+type AlbumImageXref struct {
+	Id        int             `db:"id"`
+	AlbumId   string          `db:"album_uuid"`
+	ImageId   string          `db:"image_uuid"`
+	CreatedAt data.CustomTime `db:"created_at"`
+}

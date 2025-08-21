@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
+	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
@@ -30,6 +31,9 @@ type ImageService interface {
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
 	BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData, error)
+
+	// InsertImagePermissionXref inserts a new image_permission xref record into the database.
+	InsertImagePermissionXref(imageId, permissionId string) error
 }
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -337,5 +341,40 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 		s.logger.Info(fmt.Sprintf("image slug '%s' moved in object storage from '%s' to '%s'", updated.Slug, existing.ObjectKey, updated.ObjectKey))
 	}
 
+	return nil
+}
+
+// InsertImagePermissionXref inserts a new image_permission xref record into the database.
+func (s *imageService) InsertImagePermissionXref(imageId, permissionId string) error {
+
+	// validate the image id
+	if !validate.IsValidUuid(imageId) {
+		return fmt.Errorf("image ID must be a valid UUID")
+	}
+
+	// validate the permission id
+	if !validate.IsValidUuid(permissionId) {
+		return fmt.Errorf("permission ID must be a valid UUID")
+	}
+
+	// build the xref record to insert
+	xref := db.ImagePermissionXref{
+		Id:           0, // auto-incremented by the database
+		ImageId:      imageId,
+		PermissionId: permissionId,
+		CreatedAt:    data.CustomTime{Time: time.Now().UTC()},
+	}
+	qry := `
+		INSERT INTO image_permission (
+			id, 
+			image_uuid, 
+			permission_uuid, 
+			created_at
+		) VALUES (?, ?, ?, ?)`
+	if err := s.sql.InsertRecord(qry, xref); err != nil {
+		return fmt.Errorf("failed to insert image_permission xref record: %v", err)
+	}
+
+	s.logger.Info(fmt.Sprintf("inserted image_permission xref record for image '%s' and permission '%s'", imageId, permissionId))
 	return nil
 }

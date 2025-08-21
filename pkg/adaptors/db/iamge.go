@@ -100,3 +100,10 @@ func (r *ImageRecord) Validate() error {
 
 	return nil
 }
+
+type ImagePermissionXref struct {
+	Id           int             `db:"id" json:"id"`                         // Unique identifier for the xref record
+	ImageId      string          `db:"image_uuid" json:"image_id"`           // UUID of the image
+	PermissionId string          `db:"permission_uuid" json:"permission_id"` // UUID of the permission
+	CreatedAt    data.CustomTime `db:"created_at" json:"created_at"`         // Timestamp when the xref was created
+}

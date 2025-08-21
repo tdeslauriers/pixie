@@ -208,7 +208,7 @@ func (g *gallery) Run() error {
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
 	// album handlers
-	pics := picture.NewHandler(g.pictures, g.s2sVerifier, g.iamVerifier)
+	pics := picture.NewHandler(g.pictures, g.permissions, g.s2sVerifier, g.iamVerifier)
 	mux.HandleFunc("/albums", pics.HandleAlbums) // handles album listing and creation
 	mux.HandleFunc("/albums/", pics.HandleAlbum) // trailing slash is so slugs can be appended to the path
 

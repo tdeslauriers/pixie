@@ -14,6 +14,7 @@ import (
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
+	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 var (
@@ -30,11 +31,12 @@ type ImageHandler interface {
 }
 
 // NewHandler creates a new image handler instance, returning a pointer to the concrete implementation.
-func NewImageHandler(s Service, s2s, iam jwt.Verifier) ImageHandler {
+func NewImageHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) ImageHandler {
 	return &imageHandler{
-		svc: s,
-		s2s: s2s,
-		iam: iam,
+		svc:   s,
+		perms: p,
+		s2s:   s2s,
+		iam:   iam,
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
@@ -47,9 +49,10 @@ var _ ImageHandler = (*imageHandler)(nil)
 
 // imageHandler is a concrete implementation of the Handler interface.
 type imageHandler struct {
-	svc Service // The image service instance to handle image processing tasks
-	s2s jwt.Verifier
-	iam jwt.Verifier
+	svc   Service
+	perms permission.Service
+	s2s   jwt.Verifier
+	iam   jwt.Verifier
 
 	logger *slog.Logger
 }
@@ -371,26 +374,67 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// add the pre-added album mappings from the upload command.
-	// get all existing albums
-	allAlbums, err := h.svc.GetAllowedAlbums(authorized.Claims.Subject)
-	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/ handler failed to get allowed albums for user '%s': %v", authorized.Claims.Subject, err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "internal server error fetching albums",
+	// adding album associations is optional at this juncture, so do not wait to return
+	go func() {
+		// add the pre-added album mappings from the upload command.
+		albumIds, err := h.getValidAlbumIds(authorized.Claims.Subject, cmd.Albums)
+		if err != nil {
+			h.logger.Error(fmt.Sprintf("/images/ handler failed to get valid album slugs: %v", err))
+			return // do not block the response, just log the error
 		}
-		e.SendJsonErr(w)
-		return		
-	}
 
-	// TODO: add the pre-added permissions tags from the upload command.
+		if len(albumIds) > 0 {
+			for _, albumId := range albumIds {
 
-	h.logger.Info(fmt.Sprintf("/images/ handler successfully created placeholder image record with id %s", placeholder.Id))
+				go func(albId, imgId string) {
+					// add the image to the album by updating xref table
+					if err := h.svc.InsertAlbumImageXref(albId, imgId); err != nil {
+						h.logger.Error(fmt.Sprintf("failed to add image to album '%s': %v", albId, err))
+						return
+					}
+					h.logger.Info(fmt.Sprintf("created xref between image '%s' to album '%s'", imgId, albId))
+				}(albumId, placeholder.Id)
+			}
+		}
+	}()
+
+	// adding permissions is optional at this juncture, so do not wait to return
+	go func() {
+		// get all permissions
+		psMap, _, err := h.perms.GetAllPermissions()
+		if err != nil {
+			h.logger.Error(fmt.Sprintf("/images/ handler failed to get permissions for user '%s': %v", authorized.Claims.Subject, err))
+			return // do not block the response, just log the error
+		}
+
+		// get permission ids to add to the image_permissions table
+		var permissionIds []string
+		for _, p := range cmd.Permissions {
+			if perm, ok := psMap[p.Slug]; ok {
+				permissionIds = append(permissionIds, perm.Id)
+			} else {
+				h.logger.Error(fmt.Sprintf("permission '%s' not found for user '%s'", p, authorized.Claims.Subject))
+			}
+		}
+
+		for _, permissionId := range permissionIds {
+
+			go func(imgId, permId string) {
+				// add the image to the permissions by updating xref table
+				if err := h.svc.InsertImagePermissionXref(imgId, permId); err != nil {
+					h.logger.Error(fmt.Sprintf("failed to add image to permission '%s': %v", permId, err))
+					return
+				}
+				h.logger.Info(fmt.Sprintf("created xref between image '%s' to permission '%s'", imgId, permId))
+			}(placeholder.Id, permissionId)
+		}
+	}()
+
+	h.logger.Info(fmt.Sprintf("%s successfully created placeholder image record with id %s", authorized.Claims.Subject, placeholder.Id))
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(placeholder); err != nil {
-		h.logger.Error(fmt.Sprintf("/images/ handler failed to encode placeholder image data: %v", err))
+		h.logger.Error(fmt.Sprintf("failed to encode placeholder image data: %v", err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to json encode placeholder image data",
@@ -398,4 +442,37 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		e.SendJsonErr(w)
 		return
 	}
+}
+
+// getValidAlbumIds is a helper function that retrieves the valid album IDs from the provided album command data.
+func (h *imageHandler) getValidAlbumIds(username string, albumsCmd []api.Album) ([]string, error) {
+
+	// get the user's permissions
+	ps, _, err := h.perms.GetPatronPermissions(username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve permissions for user '%s': %v", username, err)
+	}
+
+	// get the user's allowed albums
+	allowed, _, err := h.svc.GetAllowedAlbums(ps)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve allowed albums for user '%s': %v", username, err)
+	}
+
+	ids := make([]string, 0, len(albumsCmd))
+	for _, album := range albumsCmd {
+
+		// check if slug exists in the user's allowed albums
+		if _, ok := allowed[album.Slug]; !ok {
+			return nil, fmt.Errorf("album with slug '%s' not found", album.Slug)
+		}
+
+		ids = append(ids, album.Id)
+	}
+
+	if len(ids) < 1 {
+		return nil, fmt.Errorf("at least one valid album slug is required")
+	}
+
+	return ids, nil
 }

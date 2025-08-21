@@ -11,25 +11,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
 	"github.com/tdeslauriers/pixie/pkg/crypt"
-	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 // AlbumService is an interface for methods that manage album records.
 type AlbumService interface {
 
-	// GetAllowedAlbums returns a list of albums that the user is allowed to view based on their permissions.
-	GetAllowedAlbums(username string) ([]db.AlbumRecord, error)
+	// GetAllowedAlbums returns a map ([slug]album) and a list of albums that the user is allowed to
+	// view based on their permissions.
+	// Map uses slug since that is the most likely value to be used for lookups.
+	GetAllowedAlbums(psMap map[string]permissions.PermissionRecord) (map[string]db.AlbumRecord, []db.AlbumRecord, error)
 
 	// GetAlbum returns a specific album record by its slug, and
 	// a slice of the thumbnail images for the album.
 	// Note: username is required to check permissions for each of the album's associated images.
-	GetAlbumBySlug(slug, username string) (*api.Album, error)
+	GetAlbumBySlug(slug string, psMap map[string]permissions.PermissionRecord) (*api.Album, error)
 
 	// CreateAlbum creates a new album record in the database, ecrypots sensitive fields, and
 	// returns a pointer to the created album record,
@@ -38,6 +40,9 @@ type AlbumService interface {
 
 	// UpdateAlbum updates an existing album record in the database.
 	UpdateAlbum(updated db.AlbumRecord) error
+
+	// InsertAlbumImageXref creates a new record in the album_image xref table to associate an image with an album.
+	InsertAlbumImageXref(albumId, imageId string) error
 }
 
 // NewAlbumService creates a new album service and provides a pointer to a concrete implementation.
@@ -46,7 +51,6 @@ func NewAlbumService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, o s
 		sql:     sql,
 		indexer: i,
 		cryptor: crypt.NewCryptor(c),
-		perms:   permission.NewService(sql, i, c),
 		store:   o,
 
 		logger: slog.Default().
@@ -63,7 +67,6 @@ type albumService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
 	cryptor crypt.Cryptor
-	perms   permission.Service
 	store   storage.ObjectStorage
 
 	logger *slog.Logger
@@ -73,24 +76,13 @@ type albumService struct {
 // this method must consider the users permissions, and
 // the images attached to the albums premissions and only return an album if the user is
 // authorized to view at least one image in the album.
-func (s *albumService) GetAllowedAlbums(username string) ([]db.AlbumRecord, error) {
-
-	// validate the username
-	// redundant check, but good practice
-	if err := validate.IsValidEmail(username); err != nil {
-		return nil, fmt.Errorf("invalid username: %v", err)
-	}
-
-	// fetch a map of the user's permissions for query builder
-	psMap, _, err := s.perms.GetPatronPermissions(username)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve permissions for user '%s': %v", username, err)
-	}
+// Also returns a map for convenience lookups by consuming functions.
+func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionRecord) (map[string]db.AlbumRecord, []db.AlbumRecord, error) {
 
 	// build album query based on permissions
 	qry, err := db.BuildAlbumSQuery(psMap)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build album permission query: %v", err)
+		return nil, nil, fmt.Errorf("failed to build album permission query: %v", err)
 	}
 
 	// convert the permissions map into a variatic slice of interface{}, ie args ...interface{}
@@ -105,9 +97,9 @@ func (s *albumService) GetAllowedAlbums(username string) ([]db.AlbumRecord, erro
 	var albums []db.AlbumRecord
 	if err := s.sql.SelectRecords(qry, &albums, args...); err != nil {
 		if err == sql.ErrNoRows {
-			return []db.AlbumRecord{}, nil
+			return nil, []db.AlbumRecord{}, nil
 		} else {
-			return nil, fmt.Errorf("failed to retrieve albums for user '%s': %v", username, err)
+			return nil, nil, err
 		}
 	}
 
@@ -137,25 +129,27 @@ func (s *albumService) GetAllowedAlbums(username string) ([]db.AlbumRecord, erro
 			errs = append(errs, e)
 		}
 		if len(errs) > 0 {
-			return nil, fmt.Errorf("failed to decrypt one or more album records: %v", errors.Join(errs...))
+			return nil, nil, fmt.Errorf("failed to decrypt one or more album records: %v", errors.Join(errs...))
 		}
 	}
 
-	return albums, nil
+	// after decryption, build a lookup map for convenience
+	aMap := make(map[string]db.AlbumRecord, len(albums))
+	for _, a := range albums {
+		aMap[a.Slug] = a
+	}
+
+	return aMap, albums, nil
 }
 
 // GetAlbumBySlug implements the Service interface method to retrieve a specific album record by its slug.
 // It also retrieves a slice of the thumbnail images for the album.
-func (s *albumService) GetAlbumBySlug(slug, username string) (*api.Album, error) {
+func (s *albumService) GetAlbumBySlug(slug string, psMap map[string]permissions.PermissionRecord) (*api.Album, error) {
 
-	// vadidate the slug and the username
+	// vadidate the slug is well formed
 	// redundant check, but good practice
 	if !validate.IsValidUuid(slug) {
 		return nil, fmt.Errorf("invalid album slug: %s", slug)
-	}
-
-	if err := validate.IsValidEmail(username); err != nil {
-		return nil, fmt.Errorf("invalid username: %v", err)
 	}
 
 	// get album index
@@ -164,13 +158,7 @@ func (s *albumService) GetAlbumBySlug(slug, username string) (*api.Album, error)
 		return nil, fmt.Errorf("failed to obtain blind index for album slug '%s': %v", slug, err)
 	}
 
-	// get the user's permissions
-	psMap, _, err := s.perms.GetPatronPermissions(username)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve permissions for user '%s': %v", username, err)
-	}
-
-	// build the album query
+	// build the album query with the users permissions
 	qry, err := db.BuildAlbumImagesQuery(psMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create query for album slug %s", slug)
@@ -190,15 +178,15 @@ func (s *albumService) GetAlbumBySlug(slug, username string) (*api.Album, error)
 	var records []db.AlbumImageRecord
 	if err := s.sql.SelectRecords(qry, &records, args...); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to find images user '%s' has permission to view in this album", username)
+			return nil, fmt.Errorf("failed to find images user has permission to view in this album")
 		} else {
-			return nil, fmt.Errorf("failed to retrieve album slug %s from database for user '%s': %v", slug, username, err)
+			return nil, fmt.Errorf("failed to retrieve album slug %s from database for user: %v", slug, err)
 		}
 	}
 
 	// seocondary check to ensure we have records
 	if len(records) == 0 {
-		return nil, fmt.Errorf("no images found for album slug %s and user %s's permissions level(s)", slug, username)
+		return nil, fmt.Errorf("no images found for album slug %s and user's permissions level(s)", slug)
 	}
 
 	// build the album modelfrom the first record
@@ -440,6 +428,39 @@ func (s *albumService) UpdateAlbum(updated db.AlbumRecord) error {
 
 	// log the update
 	s.logger.Info(fmt.Sprintf("updated album record '%s'", updated.Id))
+
+	return nil
+}
+
+func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
+
+	// validate the album id and image id
+	// redundant check, but good practice
+	if !validate.IsValidUuid(albumId) {
+		return fmt.Errorf("invalid album id: %s", albumId)
+	}
+	if !validate.IsValidUuid(imageId) {
+		return fmt.Errorf("invalid image id: %s", imageId)
+	}
+
+	// build the xref record
+	xref := db.AlbumImageXref{
+		Id:        0, // auto-increment
+		AlbumId:   albumId,
+		ImageId:   imageId,
+		CreatedAt: data.CustomTime{Time: time.Now().UTC()},
+	}
+
+	qry := `
+		INSERT INTO album_image_xref (
+			id,
+			album_uuid,
+			image_uuid,
+			created_at
+		) VALUES (?, ?, ?, ?)`
+	if err := s.sql.InsertRecord(qry, xref); err != nil {
+		return fmt.Errorf("failed to insert album-image xref record into database: %v", err)
+	}
 
 	return nil
 }
