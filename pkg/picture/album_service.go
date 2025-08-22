@@ -452,7 +452,7 @@ func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
 	}
 
 	qry := `
-		INSERT INTO album_image_xref (
+		INSERT INTO album_image (
 			id,
 			album_uuid,
 			image_uuid,

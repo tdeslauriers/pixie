@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/data"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
@@ -20,8 +22,10 @@ import (
 // It defines methods that any image service must implement to handle image processing tasks.
 // For example, fetching image db data and requesting signed URLs from the object storage service.
 type ImageService interface {
-	// GetImageData retrieves image data from the database along with a signed URL for the image.
-	GetImageData(slug string) (*api.ImageData, error)
+
+	// GetImageData retrieves image data from the database (based on the user's permissions) and
+	// fetches signed URL for the image.
+	GetImageData(slug string, userPs map[string]permissions.PermissionRecord) (*api.ImageData, error)
 
 	// UpdateImageData updates an existing image record in the database.
 	UpdateImageData(existing *api.ImageData, updated *db.ImageRecord) error
@@ -31,9 +35,6 @@ type ImageService interface {
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
 	BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData, error)
-
-	// InsertImagePermissionXref inserts a new image_permission xref record into the database.
-	InsertImagePermissionXref(imageId, permissionId string) error
 }
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -63,8 +64,15 @@ type imageService struct {
 }
 
 // GetImageData is the concrete implementation of the interface method which
-// retrieves image data from the database along with a signed URL for the image.
-func (s *imageService) GetImageData(slug string) (*api.ImageData, error) {
+// retrieves image data from the database (based on the user's permissions) and
+// fetches signed URL for the image.
+func (s *imageService) GetImageData(slug string, userPs map[string]permissions.PermissionRecord) (*api.ImageData, error) {
+
+	// validate the slug
+	// redundant check, but good practice
+	if !validate.IsValidUuid(slug) {
+		return nil, fmt.Errorf("image slug '%s' is not well-formed", slug)
+	}
 
 	// get blind index for the slug
 	index, err := s.indexer.ObtainBlindIndex(slug)
@@ -72,38 +80,57 @@ func (s *imageService) GetImageData(slug string) (*api.ImageData, error) {
 		return nil, fmt.Errorf("failed to generate blind index for image slug '%s': %v", slug, err)
 	}
 
-	// get image record (metadata) from the database using the slug index
-	qry := `
-		SELECT 
-			uuid,
-			title,
-			description,
-			file_name,
-			file_type,
-			object_key,
-			slug,
-			slug_index,
-			width,
-			height,
-			size,
-			image_date,
-			created_at,
-			updated_at,
-			is_archived,
-			is_published 
-		FROM image 
-		WHERE slug_index = ?`
+	// build query based on the user's permissions
+	qry := db.BuildGetImageQuery(userPs)
+
+	// create the []args ...interface{} slice
+	args := make([]interface{}, 0, len(userPs)+1)
+
+	// add the slug index as the first argument
+	args = append(args, index)
+
+	// if the user is not a curator/admin, add the permission uuids as the remaining arguments
+	if _, ok := userPs[util.PermissionCurator]; !ok {
+		for _, p := range userPs {
+			args = append(args, p.Id)
+		}
+	}
+
 	var record db.ImageRecord
-	if err := s.sql.SelectRecord(qry, &record, index); err != nil {
-		return nil, fmt.Errorf("failed to select image record for slug '%s': %v", slug, err)
+	if err := s.sql.SelectRecord(qry, &record, args...); err != nil {
+		// all of the following presume the user is not a curator/admin.
+		if err == sql.ErrNoRows {
+			// check if the image exists but the user has not permissions
+			if exists, err := s.sql.SelectExists(db.BuildImagePermissionsQry(userPs), args...); err != nil {
+				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
+			} else if exists {
+				return nil, fmt.Errorf("user does not have permission to view image '%s'", slug)
+			}
+
+			// check if the image is archived
+			if exists, err := s.sql.SelectExists(db.BuildImageArchivedQry(), index); err != nil {
+				return nil, fmt.Errorf("failed to check if image is archived for slug '%s': %v", slug, err)
+			} else if exists {
+				return nil, fmt.Errorf("image '%s' is archived", slug)
+			}
+
+			// check if the image is published
+			if exists, err := s.sql.SelectExists(db.BuildImagePublishedQry(), index); err != nil {
+				return nil, fmt.Errorf("failed to check if image is published for slug '%s': %v", slug, err)
+			} else if !exists {
+				return nil, fmt.Errorf("image '%s' is not published", slug)
+			}
+
+			// unknown error
+			return nil, fmt.Errorf("image '%s' was not found for unknown/unaccounted for reason", slug)
+		}
+		return nil, fmt.Errorf("failed to get image data for slug '%s': %v", slug, err)
 	}
 
 	// decrypt the sensitive fields in the image record
 	if err := s.cryptor.DecryptImageRecord(&record); err != nil {
 		return nil, fmt.Errorf("failed to decrypt image record for slug '%s': %v", slug, err)
 	}
-
-	fmt.Printf("Retrieved image record: %+v\n", record)
 
 	// Generate a signed URL for the image from object storage service
 	if record.ObjectKey == "" {
@@ -288,7 +315,7 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 		existing.ObjectKey == updated.ObjectKey &&
 		existing.IsArchived == updated.IsArchived &&
 		existing.IsPublished == updated.IsPublished {
-		s.logger.Info(fmt.Sprintf("no changes detected for image slug '%s', skipping update", existing.Slug))
+		s.logger.Warn(fmt.Sprintf("no changes detected for image slug '%s', skipping update", existing.Slug))
 		return nil // no changes, nothing to update
 	}
 
@@ -341,40 +368,5 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 		s.logger.Info(fmt.Sprintf("image slug '%s' moved in object storage from '%s' to '%s'", updated.Slug, existing.ObjectKey, updated.ObjectKey))
 	}
 
-	return nil
-}
-
-// InsertImagePermissionXref inserts a new image_permission xref record into the database.
-func (s *imageService) InsertImagePermissionXref(imageId, permissionId string) error {
-
-	// validate the image id
-	if !validate.IsValidUuid(imageId) {
-		return fmt.Errorf("image ID must be a valid UUID")
-	}
-
-	// validate the permission id
-	if !validate.IsValidUuid(permissionId) {
-		return fmt.Errorf("permission ID must be a valid UUID")
-	}
-
-	// build the xref record to insert
-	xref := db.ImagePermissionXref{
-		Id:           0, // auto-incremented by the database
-		ImageId:      imageId,
-		PermissionId: permissionId,
-		CreatedAt:    data.CustomTime{Time: time.Now().UTC()},
-	}
-	qry := `
-		INSERT INTO image_permission (
-			id, 
-			image_uuid, 
-			permission_uuid, 
-			created_at
-		) VALUES (?, ?, ?, ?)`
-	if err := s.sql.InsertRecord(qry, xref); err != nil {
-		return fmt.Errorf("failed to insert image_permission xref record: %v", err)
-	}
-
-	s.logger.Info(fmt.Sprintf("inserted image_permission xref record for image '%s' and permission '%s'", imageId, permissionId))
 	return nil
 }

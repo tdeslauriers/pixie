@@ -3,6 +3,7 @@ package permission
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
@@ -14,7 +15,13 @@ import (
 // PermissionsService is the interface for managing a patrons permissions in the database.
 type PatronPermissionService interface {
 	// GetPatronPermissions returns a map and a list of a patron's permissions.
+	// Key is the permission field, value is the permission record.
 	GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
+
+	// GetImagePermissions retrieves the permissions associated with an image.
+	// Returns a map and slice of PermissionRecords, or an error if any.
+	// Key is the permission field, value is the PermissionRecord.
+	GetImagePermissions(imageId string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
 
 	// AddPermissionToPatron adds a permission to a patron's permissions in the database.
 	AddPermissionToPatron(patronId, permissionId string) error
@@ -48,6 +55,7 @@ type patronPermissionService struct {
 }
 
 // GetPatronPermissions retrieves a patron's permissions from the database.
+// Key is the permission field, value is the permission record.
 func (s *patronPermissionService) GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
 
 	// validate the username
@@ -103,6 +111,69 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 	}
 
 	// return the permissions
+	return psMap, records, nil
+}
+
+// GetImagePermissions is the concrete impl of the interface imple which
+// retrieves the permissions associated with an image.
+// Returns a map and slice of PermissionRecords, or an error if any.
+// Key is the permission field, value is the PermissionRecord.
+func (s *patronPermissionService) GetImagePermissions(imageId string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
+	// validate the image id
+	if !validate.IsValidUuid(imageId) {
+		return nil, nil, fmt.Errorf("image Id must be a valid UUID")
+	}
+
+	// build the query to get the permissions associated with the image
+	qry := `
+		SELECT 
+			p.uuid,
+			p.service_name,
+			p.permission,
+			p.name,
+			p.description,
+			p.created_at,
+			p.active,
+			p.slug,
+			p.slug_index
+		FROM permission p
+			LEFT OUTER JOIN image_permission ip ON p.uuid = ip.permission_uuid
+		WHERE ip.image_uuid = ?
+			AND p.active = TRUE`
+	var records []exo.PermissionRecord
+	if err := s.sql.SelectRecords(qry, &records, imageId); err != nil {
+		s.logger.Error(fmt.Sprintf("failed to retrieve permissions for image '%s': %v", imageId, err))
+		return nil, nil, err
+	}
+
+	if len(records) == 0 {
+		noneMsg := fmt.Sprintf("no permissions found for image '%s'", imageId)
+		s.logger.Info(noneMsg)
+		return nil, nil, fmt.Errorf(noneMsg)
+	}
+
+	// decrypt and create a map of permissions
+	var (
+		wg    sync.WaitGroup
+		errCh = make(chan error, len(records))
+	)
+
+	// opportunistically map the permssions during decryption
+	psMap := make(map[string]exo.PermissionRecord, len(records))
+	for i, record := range records {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			decrypted, err := s.cryptor.DecryptPermission(record)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to decrypt permission '%s': %v", record.Id, err)
+				return
+			}
+			records[i] = *decrypted
+			psMap[decrypted.Permission] = *decrypted
+		}(i)
+	}
+
 	return psMap, records, nil
 }
 

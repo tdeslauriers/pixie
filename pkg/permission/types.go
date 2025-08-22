@@ -35,3 +35,26 @@ type PatronPermissionXrefRecord struct {
 	PermissionId string          `db:"permission_uuid" json:"permission_uuid,omitempty"`
 	CreatedAt    data.CustomTime `db:"created_at" json:"created_at,omitempty"`
 }
+
+// MapPermissionRecordsToApi is a helper method which maps a slice of
+// PermissionRecords to a slice of API Permission objects.
+func MapPermissionRecordsToApi(records []permissions.PermissionRecord) ([]permissions.Permission, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	permissionsList := make([]permissions.Permission, len(records))
+	for i, record := range records {
+		permissionsList[i] = permissions.Permission{
+			Id:          record.Id,
+			ServiceName: record.ServiceName,
+			Permission:  record.Permission,
+			Name:        record.Name,
+			Description: record.Description,
+			CreatedAt:   record.CreatedAt,
+			Active:      record.Active,
+			Slug:        record.Slug,
+		}
+	}
+	return permissionsList, nil
+}

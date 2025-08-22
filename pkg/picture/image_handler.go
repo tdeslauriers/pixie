@@ -117,7 +117,8 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 
 	// validate iam token
 	accessToken := r.Header.Get("Authorization")
-	if _, err := h.iam.BuildAuthorized(readImagesAllowed, accessToken); err != nil {
+	authorized, err := h.iam.BuildAuthorized(readImagesAllowed, accessToken)
+	if err != nil {
 		h.logger.Error(fmt.Sprintf("/images/slug handler failed to authorize iam token: %v", err))
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
@@ -134,18 +135,79 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imageData, err := h.svc.GetImageData(slug)
+	// get user permissions
+	usrPsMap, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/slug handler failed to get image data: %v", err))
+		h.logger.Error(fmt.Sprintf("/images/slug handler failed to get permissions for user '%s': %v", authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to get image data",
+			Message:    "failed to get user permissions",
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
-	// TODO: once permissions are added, make it so only admins can see unpublished/archived images
+	imageData, err := h.svc.GetImageData(slug, usrPsMap)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("/images/slug handler failed to get image data: %v", err))
+		h.svc.HandleImageServiceError(err, w)
+		return
+	}
+
+	// if user is a curator/admin, need to return the album and permission xrefs
+	if _, ok := usrPsMap[util.PermissionCurator]; ok {
+
+		_, albumRecords, err := h.svc.GetImageAlbums(imageData.Id)
+		if err != nil {
+			if strings.Contains(err.Error(), "no albums found") {
+				// no albums found is not an error, log it as a warning
+				h.logger.Warn(fmt.Sprintf("/images/slug handler no albums found for image '%s': %v", imageData.Slug, err))
+			} else {
+				errMsg := fmt.Sprintf("/images/slug handler failed to get albums for image '%s': %v", imageData.Slug, err)
+				h.logger.Error(errMsg)
+				// TODO once shunt to go routine, handle as channel err
+			}
+		}
+
+		albums, err := mapAlbumRecordsToApi(albumRecords)
+		if err != nil {
+			h.logger.Error(fmt.Sprintf("/images/slug handler failed to map album records to API: %v", err))
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusInternalServerError,
+				Message:    "failed to map album records to API",
+			}
+			e.SendJsonErr(w)
+			return
+		}
+
+		imageData.Albums = albums
+
+		// get the permissions associated with the image
+		_, permissionRecords, err := h.perms.GetImagePermissions(imageData.Id)
+		if err != nil {
+			if strings.Contains(err.Error(), "no permissions found") {
+				// no permissions found is not an error, log it as a warning
+				h.logger.Warn(fmt.Sprintf("/images/slug handler no permissions found for image '%s': %v", imageData.Slug, err))
+			} else {
+				errMsg := fmt.Sprintf("/images/slug handler failed to get permissions for image '%s': %v", imageData.Slug, err)
+				h.logger.Error(errMsg)
+				// TODO once shunt to go routine, handle as channel err
+			}
+		}
+
+		permissions, err := permission.MapPermissionRecordsToApi(permissionRecords)
+		if err != nil {
+			h.logger.Error(fmt.Sprintf("/images/slug handler failed to map permission records to API: %v", err))
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusInternalServerError,
+				Message:    "failed to map permission records to API",
+			}
+			e.SendJsonErr(w)
+			return
+		}
+
+		imageData.Permissions = permissions
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(imageData); err != nil {
@@ -212,15 +274,23 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// check if the image exists
-	existing, err := h.svc.GetImageData(slug)
+	// get user permissions
+	usrPsMap, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("/images/slug handler failed to get image data: %v", err))
+		h.logger.Error(fmt.Sprintf("/images/slug handler failed to get permissions for user '%s': %v", authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{
-			StatusCode: http.StatusNotFound,
-			Message:    fmt.Sprintf("image with slug '%s' not found", slug),
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to get user permissions",
 		}
 		e.SendJsonErr(w)
+		return
+	}
+
+	// check if the image exists
+	existing, err := h.svc.GetImageData(slug, usrPsMap)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("/images/slug handler failed to get image data: %v", err))
+		h.svc.HandleImageServiceError(err, w)
 		return
 	}
 
@@ -275,11 +345,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	// handles updating the object store if necessary
 	if err := h.svc.UpdateImageData(existing, updated); err != nil {
 		h.logger.Error(fmt.Sprintf("/images/slug handler failed to update image record: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to update image record",
-		}
-		e.SendJsonErr(w)
+		h.svc.HandleImageServiceError(err, w)
 		return
 	}
 
@@ -366,11 +432,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 	placeholder, err := h.svc.BuildPlaceholder(cmd)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("/images handler failed to build placeholder image record: %v", err))
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to build placeholder image record",
-		}
-		e.SendJsonErr(w)
+		h.svc.HandleImageServiceError(err, w)
 		return
 	}
 

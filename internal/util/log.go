@@ -14,17 +14,19 @@ const (
 	// component keys
 	ComponentKey = "component"
 
+	ComponentAlbumCryptor      = "album cryptor"
+	ComponentAlbumHandler      = "album handler"
+	ComponentAlbumImageService = "album image service"
+	ComponentAlbumSerivce      = "album service"
 	ComponentMain              = "main"
 	ComponentImage             = "image"
+	ComponentImageServiceErr   = "image service error"
 	ComponentImageCryptor      = "image cryptor"
 	ComponentGallery           = "gallery"
 	ComponentPermissions       = "permissions"
 	ComponentPatron            = "patron"
 	ComponentPatronPermissions = "patron permissions"
 	ComponentPatronRegister    = "patron register"
-	ComponentAlbumSerivce      = "album service"
-	ComponentAlbumHandler      = "album handler"
-	ComponentAlbumCryptor      = "album cryptor"
 
 	// service keys
 	ServiceKey = "service"
