@@ -137,7 +137,7 @@ func BuildGetImageQuery(userPs map[string]permissions.PermissionRecord) string {
 		FROM image i
 			LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid
 			LEFT OUTER JOIN permission p ON ip.permission_uuid = p.uuid
-		WHERE slug_index = ?`
+		WHERE i.slug_index = ?`
 	qb.WriteString(baseQry)
 
 	// check if the user is a curator (admin)
@@ -160,8 +160,8 @@ func BuildGetImageQuery(userPs map[string]permissions.PermissionRecord) string {
 	}
 
 	// if the user is not a curator, they can only see published, non-archived images
-	qb.WriteString(" AND is_published = TRUE")
-	qb.WriteString(" AND is_archived = FALSE")
+	qb.WriteString(" AND i.is_published = TRUE")
+	qb.WriteString(" AND i.is_archived = FALSE")
 
 	return qb.String()
 }
@@ -177,7 +177,7 @@ func BuildImagePermissionsQry(userPs map[string]permissions.PermissionRecord) st
 			FROM image i
 				LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid
 				LEFT OUTER JOIN permission p ON ip.permission_uuid = p.uuid
-			WHERE slug_index = ?`
+			WHERE i.slug_index = ?`
 	qb.WriteString(baseQry)
 
 	// Exclude images that have any of the user's permissions
@@ -210,8 +210,8 @@ func BuildImageArchivedQry() string {
 			FROM image i
 				LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid
 				LEFT OUTER JOIN permission p ON ip.permission_uuid = p.uuid
-			WHERE slug_index = ?
-				AND is_archived = TRUE`
+			WHERE i.slug_index = ?
+				AND i.is_archived = TRUE`
 	qb.WriteString(baseQry)
 
 	return qb.String()
@@ -229,8 +229,8 @@ func BuildImagePublishedQry() string {
 			FROM image i
 				LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid
 				LEFT OUTER JOIN permission p ON ip.permission_uuid = p.uuid
-			WHERE slug_index = ?
-				AND is_published = FALSE`
+			WHERE i.slug_index = ?
+				AND i.is_published = FALSE`
 	qb.WriteString(baseQry)
 
 	return qb.String()
