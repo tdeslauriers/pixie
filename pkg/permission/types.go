@@ -9,6 +9,7 @@ import (
 type Service interface {
 	permissions.Service
 	PatronPermissionService
+	ImagePermissionService
 }
 
 // NewService creates a new service instance, returning a pointer to the concrete implementation.
@@ -16,6 +17,7 @@ func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Service 
 	return &service{
 		Service:                 permissions.NewService(sql, i, c),
 		PatronPermissionService: NewPatronPermissionService(sql, i, c),
+		ImagePermissionService:  NewImagePermissionService(sql, i, c),
 	}
 }
 
@@ -26,6 +28,7 @@ var _ Service = (*service)(nil)
 type service struct {
 	permissions.Service
 	PatronPermissionService
+	ImagePermissionService
 }
 
 // PatronPermissionXrefRecord is a model which represents a patron permission cross-reference record in the database.

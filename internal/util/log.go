@@ -20,6 +20,7 @@ const (
 	ComponentAlbumSerivce      = "album service"
 	ComponentMain              = "main"
 	ComponentImage             = "image"
+	ComponentImagePermissions  = "image permissions"
 	ComponentImageServiceErr   = "image service error"
 	ComponentImageCryptor      = "image cryptor"
 	ComponentGallery           = "gallery"
