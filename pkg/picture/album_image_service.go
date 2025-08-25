@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -256,8 +257,12 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 
 	// get the current albums associated with the image
 	currentAlbumsMap, _, err := s.GetImageAlbums(imageId)
-	if err != nil && !errors.Is(err, fmt.Errorf("no albums found for image '%s'", imageId)) {
-		return fmt.Errorf("failed to get current albums for image '%s': %v", imageId, err)
+	if err != nil {
+		if strings.Contains(err.Error(), "no albums found for image") {
+			s.logger.Warn(fmt.Sprintf("image '%s' currently has no albums associated", imageId))
+		} else {
+			return fmt.Errorf("failed to get current albums for image '%s': %v", imageId, err)
+		}
 	}
 
 	// determine which albums need to be added and which need to be removed
@@ -278,66 +283,71 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 		}
 	}
 
-	s.logger.Info(fmt.Sprintf("updating albums for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
+	if len(toAdd) > 0 || len(toRemove) > 0 {
+		s.logger.Info(fmt.Sprintf("updating albums for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
 
-	// perform the additions and removals in parallel
-	var (
-		xrefWg    sync.WaitGroup
-		xrefErrCh = make(chan error, len(toAdd)+len(toRemove))
-	)
+		// perform the additions and removals in parallel
+		var (
+			xrefWg    sync.WaitGroup
+			xrefErrCh = make(chan error, len(toAdd)+len(toRemove))
+		)
 
-	for _, a := range toAdd {
-		xrefWg.Add(1)
-		go func(albumId string) {
-			defer xrefWg.Done()
-			qry := `
+		for _, a := range toAdd {
+			xrefWg.Add(1)
+			go func(albumId string) {
+				defer xrefWg.Done()
+				qry := `
 				INSERT INTO album_image (
 					id, 
 					album_uuid, 
 					image_uuid, 
 					created_at) 
 				VALUES (?, ?, ?, ?)`
-			xref := db.AlbumImageXref{
-				Id:        0, // auto-incremented by the database
-				AlbumId:   albumId,
-				ImageId:   imageId,
-				CreatedAt: data.CustomTime{Time: time.Now().UTC()},
-			}
-			if err := s.sql.InsertRecord(qry, xref); err != nil {
-				xrefErrCh <- fmt.Errorf("failed to add album '%s' to image '%s': %v", albumId, imageId, err)
-				return
-			}
-			s.logger.Info(fmt.Sprintf("added album '%s' to image '%s'", albumId, imageId))
-		}(a.Id)
-	}
-
-	for _, a := range toRemove {
-		xrefWg.Add(1)
-		go func(albumId string) {
-			defer xrefWg.Done()
-			qry := `DELETE FROM album_image WHERE album_uuid = ? AND image_uuid = ?`
-			if err := s.sql.DeleteRecord(qry, albumId, imageId); err != nil {
-				xrefErrCh <- fmt.Errorf("failed to remove album '%s' from image '%s': %v", albumId, imageId, err)
-				return
-			}
-			s.logger.Info(fmt.Sprintf("removed album '%s' from image '%s'", albumId, imageId))
-		}(a.Id)
-	}
-
-	xrefWg.Wait()
-	close(xrefErrCh)
-
-	// check for errors during xref updates
-	if len(xrefErrCh) > 0 {
-		var errs []error
-		for e := range xrefErrCh {
-			errs = append(errs, e)
+				xref := db.AlbumImageXref{
+					Id:        0, // auto-incremented by the database
+					AlbumId:   albumId,
+					ImageId:   imageId,
+					CreatedAt: data.CustomTime{Time: time.Now().UTC()},
+				}
+				if err := s.sql.InsertRecord(qry, xref); err != nil {
+					xrefErrCh <- fmt.Errorf("failed to add album '%s' to image '%s': %v", albumId, imageId, err)
+					return
+				}
+				s.logger.Info(fmt.Sprintf("added album '%s' to image '%s'", albumId, imageId))
+			}(a.Id)
 		}
-		if len(errs) > 0 {
-			return fmt.Errorf("failed to update some album_image xref records: %v", errors.Join(errs...))
+
+		for _, a := range toRemove {
+			xrefWg.Add(1)
+			go func(albumId string) {
+				defer xrefWg.Done()
+				qry := `DELETE FROM album_image WHERE album_uuid = ? AND image_uuid = ?`
+				if err := s.sql.DeleteRecord(qry, albumId, imageId); err != nil {
+					xrefErrCh <- fmt.Errorf("failed to remove album '%s' from image '%s': %v", albumId, imageId, err)
+					return
+				}
+				s.logger.Info(fmt.Sprintf("removed album '%s' from image '%s'", albumId, imageId))
+			}(a.Id)
 		}
+
+		xrefWg.Wait()
+		close(xrefErrCh)
+
+		// check for errors during xref updates
+		if len(xrefErrCh) > 0 {
+			var errs []error
+			for e := range xrefErrCh {
+				errs = append(errs, e)
+			}
+			if len(errs) > 0 {
+				return fmt.Errorf("failed to update some album_image xref records: %v", errors.Join(errs...))
+			}
+		}
+
+		s.logger.Info(fmt.Sprintf("successfully updated albums for image '%s'", imageId))
+	} else {
+		s.logger.Info(fmt.Sprintf("no album changes detected for image '%s', nothing to update", imageId))
 	}
 
-	s.logger.Info(fmt.Sprintf("successfully updated albums for image '%s'", imageId))
 	return nil
 }

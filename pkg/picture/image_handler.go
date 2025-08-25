@@ -372,14 +372,19 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	}
 
 	// TODO: add concurrency here if needed
-	// TODO: update albums associated with the image
+	// update albums associated with the image
 	if err := h.svc.UpdateAlbumImages(existing.Id, cmd.AlbumSlugs); err != nil {
 		h.logger.Error(fmt.Sprintf("/images/slug handler failed to update image albums: %v", err))
 		h.svc.HandleImageServiceError(err, w)
 		return
 	}
 
-	// TODO: update permissions associated with the image
+	// update permissions associated with the image
+	if err := h.perms.UpdateImagePermissions(existing.Id, cmd.PermissionSlugs); err != nil {
+		h.logger.Error(fmt.Sprintf("/images/slug handler failed to update image permissions: %v", err))
+		h.svc.HandleImageServiceError(err, w)
+		return
+	}
 
 	// audit log
 	if existing.Title != updated.Title {

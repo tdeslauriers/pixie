@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
@@ -19,6 +21,12 @@ type ImagePermissionService interface {
 	// Returns a map and slice of PermissionRecords, or an error if any.
 	// Key is the permission field, value is the PermissionRecord.
 	GetImagePermissions(imageId string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
+
+	// UpdateImagePermissions updates the permissions associated with an image.
+	// It adds new permissions and removes old ones as necessary.
+	// It takes the image ID and a slice of permission slugs to be associated with the image.
+	// Returns an error if any.
+	UpdateImagePermissions(imageId string, permissionSlugs []string) error
 }
 
 // NewImagePermissionService creates a new ImagePermissionService instance, returning a pointer to the concrete implementation.
@@ -121,4 +129,189 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 	}
 
 	return psMap, records, nil
+}
+
+// UpdateImagePermissions is the concret implementation of the interface method which
+// updates the permissions associated with an image.
+// It adds new permissions and removes old ones as necessary.
+// It takes the image ID and a slice of permission slugs to be associated with the image.
+// Returns an error if any.
+func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissionSlugs []string) error {
+
+	// validate the image id
+	if !validate.IsValidUuid(imageId) {
+		return fmt.Errorf("image Id must be a valid UUID")
+	}
+
+	// validate the permission slugs
+	for _, slug := range permissionSlugs {
+		if !validate.IsValidUuid(slug) {
+			return fmt.Errorf("permission slug '%s' is not valid", slug)
+		}
+	}
+
+	// check if cmd permission slugs are real permission's slugs
+	qry := `SELECT uuid, service_name, permission, name, description, created_at, active, slug, slug_index FROM permission`
+	var records []exo.PermissionRecord
+	if err := s.sql.SelectRecords(qry, &records); err != nil {
+		return fmt.Errorf("failed to retrieve all permissions: %v", err)
+	}
+
+	// this should never happen, but just in case
+	if len(records) == 0 {
+		return fmt.Errorf("no permissions found in the database")
+	}
+
+	// decrypt and create a map of all permissions
+	var (
+		decryptWg    sync.WaitGroup
+		decryptErrCh = make(chan error, len(records))
+	)
+	allPsMap := make(map[string]exo.PermissionRecord, len(records))
+	decryptMu := &sync.Mutex{}
+
+	for i, record := range records {
+		decryptWg.Add(1)
+		go func(i int, record exo.PermissionRecord) {
+			defer decryptWg.Done()
+			decrypted, err := s.cryptor.DecryptPermission(record)
+			if err != nil {
+				decryptErrCh <- fmt.Errorf("failed to decrypt permission '%s': %v", record.Id, err)
+				return
+			}
+			records[i] = *decrypted
+
+			// opportunistically build the map during decryption
+			decryptMu.Lock()
+			allPsMap[decrypted.Slug] = *decrypted
+			decryptMu.Unlock()
+		}(i, record)
+	}
+
+	// handle decryption errors
+	decryptWg.Wait()
+	close(decryptErrCh)
+
+	if len(decryptErrCh) > 0 {
+		var errs []error
+		for e := range decryptErrCh {
+			errs = append(errs, e)
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("failed to decrypt permission records: %v", errors.Join(errs...))
+		}
+	}
+
+	// build a map of the new permissions to be associated with the image
+	newPsMap := make(map[string]exo.PermissionRecord, len(permissionSlugs))
+	for _, slug := range permissionSlugs {
+		if p, exists := allPsMap[slug]; exists {
+			newPsMap[slug] = p
+		} else {
+			return fmt.Errorf("permission slug '%s' does not exist", slug)
+		}
+	}
+
+	// get the current permissions associated with the image
+	currentPsMap, _, err := s.GetImagePermissions(imageId)
+	if err != nil {
+		if strings.Contains(err.Error(), "no permissions found for image") {
+			s.logger.Warn(fmt.Sprintf("image '%s' currently has no permissions associated", imageId))
+		} else {
+			return fmt.Errorf("failed to get current permissions for image '%s': %v", imageId, err)
+		}
+	}
+
+	// determine which permissions need to be added and which need to be removed
+	var (
+		toAdd    []exo.PermissionRecord
+		toRemove []exo.PermissionRecord
+	)
+
+	// build toAdd slice
+	for slug, p := range newPsMap {
+		if _, exists := currentPsMap[slug]; !exists {
+			toAdd = append(toAdd, p)
+		}
+	}
+
+	// build toRemove slice
+	for slug, p := range currentPsMap {
+		if _, exists := newPsMap[slug]; !exists {
+			toRemove = append(toRemove, p)
+		}
+	}
+
+	if len(toAdd) > 0 || len(toRemove) > 0 {
+		s.logger.Info(fmt.Sprintf("updating permissions for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
+		// perform the additions and removals in parallel
+		var (
+			xrefWg    sync.WaitGroup
+			xrefErrCh = make(chan error, len(toAdd)+len(toRemove))
+		)
+
+		// add new permissions associations
+		for _, p := range toAdd {
+			xrefWg.Add(1)
+			go func(permissionId string) {
+				defer xrefWg.Done()
+
+				// add the xref record
+				xref := ImagePermissionXref{
+					Id:           0, // auto-incremented by the database
+					ImageId:      imageId,
+					PermissionId: permissionId,
+					CreatedAt:    data.CustomTime{Time: time.Now().UTC()},
+				}
+				qry := `
+					INSERT INTO image_permission (
+						id, 
+						image_uuid, 
+						permission_uuid, 
+						created_at) 
+					VALUES (?, ?, ?, ?)`
+				if err := s.sql.InsertRecord(qry, xref); err != nil {
+					xrefErrCh <- fmt.Errorf("failed to add permission '%s' to image '%s': %v", p.Slug, imageId, err)
+					return
+				}
+
+				s.logger.Info(fmt.Sprintf("added permission '%s' to image '%s'", permissionId, imageId))
+			}(p.Id)
+		}
+
+		// remove old permissions associations
+		for _, p := range toRemove {
+			xrefWg.Add(1)
+			go func(permissionId string) {
+				defer xrefWg.Done()
+
+				// remove the xref record
+				qry := `DELETE FROM image_permission WHERE image_uuid = ? AND permission_uuid = ?`
+				if err := s.sql.DeleteRecord(qry, imageId, permissionId); err != nil {
+					xrefErrCh <- fmt.Errorf("failed to remove permission '%s' from image '%s': %v", p.Id, imageId, err)
+				}
+
+				s.logger.Info(fmt.Sprintf("removed permission '%s' from image '%s'", permissionId, imageId))
+			}(p.Id)
+		}
+
+		xrefWg.Wait()
+		close(xrefErrCh)
+
+		// check for errors during xref updates
+		if len(xrefErrCh) > 0 {
+			var errs []error
+			for e := range xrefErrCh {
+				errs = append(errs, e)
+			}
+			if len(errs) > 0 {
+				return fmt.Errorf("failed to update image permission xref records: %v", errors.Join(errs...))
+			}
+		}
+
+	} else {
+		s.logger.Info(fmt.Sprintf("no changes to permissions for image '%s'", imageId))
+	}
+
+	return nil
 }
