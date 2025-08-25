@@ -104,8 +104,14 @@ func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionR
 	}
 
 	// decrypt the album records
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(albums))
+	var (
+		wg    sync.WaitGroup
+		errCh = make(chan error, len(albums))
+
+		// build the map oppotunistically while looping through the albums for decryption
+		aMap = make(map[string]db.AlbumRecord, len(albums))
+		mu   sync.Mutex
+	)
 
 	for i := range albums {
 		wg.Add(1)
@@ -116,6 +122,11 @@ func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionR
 			}
 			// also need to remove the blind index from the album record
 			a.SlugIndex = ""
+
+			// add to the map
+			mu.Lock()
+			aMap[a.Slug] = *a
+			mu.Unlock()
 		}(&albums[i])
 	}
 
@@ -131,12 +142,6 @@ func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionR
 		if len(errs) > 0 {
 			return nil, nil, fmt.Errorf("failed to decrypt one or more album records: %v", errors.Join(errs...))
 		}
-	}
-
-	// after decryption, build a lookup map for convenience
-	aMap := make(map[string]db.AlbumRecord, len(albums))
-	for _, a := range albums {
-		aMap[a.Slug] = a
 	}
 
 	return aMap, albums, nil

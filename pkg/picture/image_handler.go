@@ -11,6 +11,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
@@ -157,56 +158,77 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 	// if user is a curator/admin, need to return the album and permission xrefs
 	if _, ok := usrPsMap[util.PermissionCurator]; ok {
 
-		_, albumRecords, err := h.svc.GetImageAlbums(imageData.Id)
-		if err != nil {
-			if strings.Contains(err.Error(), "no albums found") {
-				// no albums found is not an error, log it as a warning
-				h.logger.Warn(fmt.Sprintf("/images/slug handler no albums found for image '%s': %v", imageData.Slug, err))
+		type albumsResult struct {
+			records []db.AlbumRecord
+			err     error
+		}
+		type permissionsResult struct {
+			records []permissions.PermissionRecord
+			err     error
+		}
+
+		albumsCh := make(chan albumsResult, 1)
+		permissionsCh := make(chan permissionsResult, 1)
+
+		// gather albums concurrently
+		go func() {
+			_, albumRecords, err := h.svc.GetImageAlbums(imageData.Id)
+			albumsCh <- albumsResult{records: albumRecords, err: err}
+		}()
+
+		// gather permissions concurrently
+		go func() {
+			_, permissionRecords, err := h.perms.GetImagePermissions(imageData.Id)
+			permissionsCh <- permissionsResult{records: permissionRecords, err: err}
+		}()
+
+		// wait for both results
+		albumsRes := <-albumsCh
+		permissionsRes := <-permissionsCh
+
+		// handle albums result
+		if albumsRes.err != nil {
+			if strings.Contains(albumsRes.err.Error(), "no albums found") {
+				h.logger.Warn(fmt.Sprintf("/images/slug handler no albums found for image '%s': %v", imageData.Slug, albumsRes.err))
 			} else {
-				errMsg := fmt.Sprintf("/images/slug handler failed to get albums for image '%s': %v", imageData.Slug, err)
+				errMsg := fmt.Sprintf("/images/slug handler failed to get albums for image '%s': %v", imageData.Slug, albumsRes.err)
 				h.logger.Error(errMsg)
-				// TODO once shunt to go routine, handle as channel err
 			}
+		} else {
+			albums, err := mapAlbumRecordsToApi(albumsRes.records)
+			if err != nil {
+				h.logger.Error(fmt.Sprintf("/images/slug handler failed to map album records to API: %v", err))
+				e := connect.ErrorHttp{
+					StatusCode: http.StatusInternalServerError,
+					Message:    "failed to map album records to API",
+				}
+				e.SendJsonErr(w)
+				return
+			}
+			imageData.Albums = albums
 		}
 
-		albums, err := mapAlbumRecordsToApi(albumRecords)
-		if err != nil {
-			h.logger.Error(fmt.Sprintf("/images/slug handler failed to map album records to API: %v", err))
-			e := connect.ErrorHttp{
-				StatusCode: http.StatusInternalServerError,
-				Message:    "failed to map album records to API",
-			}
-			e.SendJsonErr(w)
-			return
-		}
-
-		imageData.Albums = albums
-
-		// get the permissions associated with the image
-		_, permissionRecords, err := h.perms.GetImagePermissions(imageData.Id)
-		if err != nil {
-			if strings.Contains(err.Error(), "no permissions found") {
-				// no permissions found is not an error, log it as a warning
-				h.logger.Warn(fmt.Sprintf("/images/slug handler no permissions found for image '%s': %v", imageData.Slug, err))
+		// handle permissions result
+		if permissionsRes.err != nil {
+			if strings.Contains(permissionsRes.err.Error(), "no permissions found") {
+				h.logger.Warn(fmt.Sprintf("/images/slug handler no permissions found for image '%s': %v", imageData.Slug, permissionsRes.err))
 			} else {
-				errMsg := fmt.Sprintf("/images/slug handler failed to get permissions for image '%s': %v", imageData.Slug, err)
+				errMsg := fmt.Sprintf("/images/slug handler failed to get permissions for image '%s': %v", imageData.Slug, permissionsRes.err)
 				h.logger.Error(errMsg)
-				// TODO once shunt to go routine, handle as channel err
 			}
-		}
-
-		permissions, err := permission.MapPermissionRecordsToApi(permissionRecords)
-		if err != nil {
-			h.logger.Error(fmt.Sprintf("/images/slug handler failed to map permission records to API: %v", err))
-			e := connect.ErrorHttp{
-				StatusCode: http.StatusInternalServerError,
-				Message:    "failed to map permission records to API",
+		} else {
+			permissions, err := permission.MapPermissionRecordsToApi(permissionsRes.records)
+			if err != nil {
+				h.logger.Error(fmt.Sprintf("/images/slug handler failed to map permission records to API: %v", err))
+				e := connect.ErrorHttp{
+					StatusCode: http.StatusInternalServerError,
+					Message:    "failed to map permission records to API",
+				}
+				e.SendJsonErr(w)
+				return
 			}
-			e.SendJsonErr(w)
-			return
+			imageData.Permissions = permissions
 		}
-
-		imageData.Permissions = permissions
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -349,7 +371,13 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// TODO: add concurrency here if needed
 	// TODO: update albums associated with the image
+	if err := h.svc.UpdateAlbumImages(existing.Id, cmd.AlbumSlugs); err != nil {
+		h.logger.Error(fmt.Sprintf("/images/slug handler failed to update image albums: %v", err))
+		h.svc.HandleImageServiceError(err, w)
+		return
+	}
 
 	// TODO: update permissions associated with the image
 

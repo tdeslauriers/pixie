@@ -172,7 +172,8 @@ type UpdateMetadataCmd struct {
 	IsArchived     bool   `json:"is_archived,omitempty"`      // Indicates if the image is archived
 
 	// addition fields will be added, albums, permissions, image size, etc.
-
+	AlbumSlugs      []string `json:"album_slugs,omitempty"`      // Slugs of the albums to associate with the image
+	PermissionSlugs []string `json:"permission_slugs,omitempty"` // Slugs of the permissions to associate with the image
 }
 
 // Validate checks the UpdateMetadataCmd for valid data.
@@ -223,6 +224,20 @@ func (cmd *UpdateMetadataCmd) Validate() error {
 	// validate that both the archived and published flags are not set to true at the same time
 	if cmd.IsArchived && cmd.IsPublished {
 		return fmt.Errorf("image cannot be both archived and published at the same time")
+	}
+
+	// validate the album slugs if any are provided
+	for _, slug := range cmd.AlbumSlugs {
+		if !validate.IsValidUuid(slug) {
+			return fmt.Errorf("invalid album slug: %s", slug)
+		}
+	}
+
+	// validate the permission slugs if any are provided
+	for _, slug := range cmd.PermissionSlugs {
+		if !validate.IsValidUuid(slug) {
+			return fmt.Errorf("invalid permission slug: %s", slug)
+		}
 	}
 
 	return nil

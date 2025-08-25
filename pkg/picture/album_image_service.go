@@ -25,6 +25,11 @@ type AlbumImageService interface {
 
 	// InsertImagePermissionXref inserts a new image_permission xref record into the database.
 	InsertImagePermissionXref(imageId, permissionId string) error
+
+	// UpdateAlbumImages updates the albums associated with an image.
+	// It adds new associations and removes old ones.
+	// Returns an error if any operation fails.
+	UpdateAlbumImages(imageId string, albumSlugs []string) error
 }
 
 // NewAlbumImageService creates a new AlbumImageService instace and returns a pointer to the concrete implementation.
@@ -164,5 +169,165 @@ func (s *albumImageService) InsertImagePermissionXref(imageId, permissionId stri
 	}
 
 	s.logger.Info(fmt.Sprintf("inserted image_permission xref record for image '%s' and permission '%s'", imageId, permissionId))
+	return nil
+}
+
+// UpdateAlbumImages updates the albums associated with an image.
+// It adds new associations and removes old ones.
+// Returns an error if any operation fails.
+func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []string) error {
+
+	// validate the image id
+	if !validate.IsValidUuid(imageId) {
+		return fmt.Errorf("image Id must be a valid UUID")
+	}
+
+	// if no album slugs provided, nothing to do
+	if len(albumSlugs) == 0 {
+		s.logger.Warn(fmt.Sprintf("no album slugs provided for image '%s', nothing to update", imageId))
+		return nil
+	}
+
+	// validate each album slug
+	for _, slug := range albumSlugs {
+		if !validate.IsValidUuid(slug) {
+			return fmt.Errorf("album slug '%s' must be a valid UUID", slug)
+		}
+	}
+
+	// get all albums to validate the cmd album slugs exist
+	qry := `SELECT uuid, title, description, slug, slug_index, created_at, updated_at, is_archived FROM album`
+	var allAlbums []db.AlbumRecord
+	if err := s.sql.SelectRecords(qry, &allAlbums); err != nil {
+		s.logger.Error(fmt.Sprintf("failed to retrieve all albums for validation: %v", err))
+	}
+
+	// decrypt and build a map of all albums
+	var (
+		wg    sync.WaitGroup
+		errCh = make(chan error, len(allAlbums))
+	)
+	allAlbumsMap := make(map[string]db.AlbumRecord, len(allAlbums))
+	mu := &sync.Mutex{}
+
+	for i := range allAlbums {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := s.cryptor.DecryptAlbumRecord(&allAlbums[i]); err != nil {
+				errCh <- fmt.Errorf("failed to decrypt album record: %v", err)
+				return
+			}
+			mu.Lock()
+			allAlbumsMap[allAlbums[i].Slug] = allAlbums[i]
+			mu.Unlock()
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// log errors if any
+	if len(errCh) > 0 {
+		var errs []error
+		for e := range errCh {
+			errs = append(errs, e)
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("failed to decrypt some album records: %v", errors.Join(errs...))
+		}
+	}
+
+	// build a map of the new album slugs for easy lookup
+	newAlbumsMap := make(map[string]db.AlbumRecord, len(albumSlugs))
+
+	// check that each provided album slug exists and if so add to the newAlbumsMap
+	for _, slug := range albumSlugs {
+		if _, exists := allAlbumsMap[slug]; !exists {
+			return fmt.Errorf("album with slug '%s' does not exist", slug)
+		} else {
+			newAlbumsMap[slug] = allAlbumsMap[slug]
+		}
+	}
+
+	// get the current albums associated with the image
+	currentAlbumsMap, _, err := s.GetImageAlbums(imageId)
+	if err != nil && !errors.Is(err, fmt.Errorf("no albums found for image '%s'", imageId)) {
+		return fmt.Errorf("failed to get current albums for image '%s': %v", imageId, err)
+	}
+
+	// determine which albums need to be added and which need to be removed
+	var (
+		toAdd    []db.AlbumRecord
+		toRemove []db.AlbumRecord
+	)
+
+	for slug := range newAlbumsMap {
+		if album, exists := currentAlbumsMap[slug]; !exists {
+			toAdd = append(toAdd, album)
+		}
+	}
+
+	for slug := range currentAlbumsMap {
+		if album, exists := newAlbumsMap[slug]; !exists {
+			toRemove = append(toRemove, album)
+		}
+	}
+
+	s.logger.Info(fmt.Sprintf("updating albums for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
+
+	// perform the additions and removals in parallel
+	var (
+		xrefWg    sync.WaitGroup
+		xrefErrCh = make(chan error, len(toAdd)+len(toRemove))
+	)
+
+	for _, a := range toAdd {
+		xrefWg.Add(1)
+		go func(albumId string) {
+			defer xrefWg.Done()
+			qry := `INSERT INTO album_image (id, album_uuid, image_uuid, created_at) VALUES (?, ?, ?, ?)`
+			xref := db.AlbumImageXref{
+				Id:        0, // auto-incremented by the database
+				AlbumId:   albumId,
+				ImageId:   imageId,
+				CreatedAt: data.CustomTime{Time: time.Now().UTC()},
+			}
+			if err := s.sql.InsertRecord(qry, xref); err != nil {
+				xrefErrCh <- fmt.Errorf("failed to add album '%s' to image '%s': %v", albumId, imageId, err)
+				return
+			}
+			s.logger.Info(fmt.Sprintf("added album '%s' to image '%s'", albumId, imageId))
+		}(a.Id)
+	}
+
+	for _, a := range toRemove {
+		xrefWg.Add(1)
+		go func(albumId string) {
+			defer xrefWg.Done()
+			qry := `DELETE FROM album_image WHERE album_uuid = ? AND image_uuid = ?`
+			if err := s.sql.DeleteRecord(qry, albumId, imageId); err != nil {
+				xrefErrCh <- fmt.Errorf("failed to remove album '%s' from image '%s': %v", albumId, imageId, err)
+				return
+			}
+			s.logger.Info(fmt.Sprintf("removed album '%s' from image '%s'", albumId, imageId))
+		}(a.Id)
+	}
+
+	xrefWg.Wait()
+	close(xrefErrCh)
+
+	// check for errors during xref updates
+	if len(xrefErrCh) > 0 {
+		var errs []error
+		for e := range xrefErrCh {
+			errs = append(errs, e)
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("failed to update some album_image xref records: %v", errors.Join(errs...))
+		}
+	}
+
+	s.logger.Info(fmt.Sprintf("successfully updated albums for image '%s'", imageId))
 	return nil
 }
