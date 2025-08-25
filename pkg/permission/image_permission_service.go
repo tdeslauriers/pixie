@@ -289,6 +289,7 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 				qry := `DELETE FROM image_permission WHERE image_uuid = ? AND permission_uuid = ?`
 				if err := s.sql.DeleteRecord(qry, imageId, permissionId); err != nil {
 					xrefErrCh <- fmt.Errorf("failed to remove permission '%s' from image '%s': %v", p.Id, imageId, err)
+					return
 				}
 
 				s.logger.Info(fmt.Sprintf("removed permission '%s' from image '%s'", permissionId, imageId))
