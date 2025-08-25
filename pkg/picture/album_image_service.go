@@ -101,9 +101,11 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumR
 	var (
 		wg    sync.WaitGroup
 		errCh = make(chan error, len(albums))
+
+		albumsMap = make(map[string]db.AlbumRecord, len(albums))
+		mu        sync.Mutex
 	)
 
-	albumsMap := make(map[string]db.AlbumRecord, len(albums))
 	for i := range albums {
 		wg.Add(1)
 		go func(i int) {
@@ -112,7 +114,9 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumR
 				errCh <- fmt.Errorf("failed to decrypt album record: %v", err)
 				return
 			}
+			mu.Lock()
 			albumsMap[albums[i].Slug] = albums[i]
+			mu.Unlock()
 		}(i)
 	}
 
@@ -243,10 +247,10 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 
 	// check that each provided album slug exists and if so add to the newAlbumsMap
 	for _, slug := range albumSlugs {
-		if _, exists := allAlbumsMap[slug]; !exists {
+		if album, exists := allAlbumsMap[slug]; !exists {
 			return fmt.Errorf("album with slug '%s' does not exist", slug)
 		} else {
-			newAlbumsMap[slug] = allAlbumsMap[slug]
+			newAlbumsMap[slug] = album
 		}
 	}
 
@@ -262,14 +266,14 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 		toRemove []db.AlbumRecord
 	)
 
-	for slug := range newAlbumsMap {
-		if album, exists := currentAlbumsMap[slug]; !exists {
+	for slug, album := range newAlbumsMap {
+		if _, exists := currentAlbumsMap[slug]; !exists {
 			toAdd = append(toAdd, album)
 		}
 	}
 
-	for slug := range currentAlbumsMap {
-		if album, exists := newAlbumsMap[slug]; !exists {
+	for slug, album := range currentAlbumsMap {
+		if _, exists := newAlbumsMap[slug]; !exists {
 			toRemove = append(toRemove, album)
 		}
 	}
@@ -286,7 +290,13 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 		xrefWg.Add(1)
 		go func(albumId string) {
 			defer xrefWg.Done()
-			qry := `INSERT INTO album_image (id, album_uuid, image_uuid, created_at) VALUES (?, ?, ?, ?)`
+			qry := `
+				INSERT INTO album_image (
+					id, 
+					album_uuid, 
+					image_uuid, 
+					created_at) 
+				VALUES (?, ?, ?, ?)`
 			xref := db.AlbumImageXref{
 				Id:        0, // auto-incremented by the database
 				AlbumId:   albumId,
