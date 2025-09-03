@@ -98,3 +98,16 @@ CREATE TABLE IF NOT EXISTS patron_permission (
 );
 CREATE INDEX IF NOT EXISTS idx_patron_permission ON patron_permission (patron_uuid);
 CREATE INDEX IF NOT EXISTS idx_permission_patron ON patron_permission (permission_uuid);
+
+
+-- service token
+CREATE TABLE servicetoken (
+    uuid CHAR(36) PRIMARY KEY,
+    service_name VARCHAR(32) NOT NULL,
+    service_token VARCHAR(2048) NOT NULL,
+    service_expires TIMESTAMP NOT NULL,
+    refresh_token VARCHAR(128) NOT NULL,
+    refresh_expires TIMESTAMP NOT NULL
+);
+CREATE INDEX idx_servicetoken_servicename ON servicetoken(service_name);
+CREATE INDEX idx_servicetoken_refreshexpires ON servicetoken(refresh_expires);

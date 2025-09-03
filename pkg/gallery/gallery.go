@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"sync"
 
 	"log/slog"
 	"net/http"
@@ -14,13 +15,16 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/diagnostics"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/carapace/pkg/pat"
 	"github.com/tdeslauriers/carapace/pkg/session/provider"
 	"github.com/tdeslauriers/carapace/pkg/sign"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/notification"
 	"github.com/tdeslauriers/pixie/pkg/patron"
 	"github.com/tdeslauriers/pixie/pkg/permission"
 	"github.com/tdeslauriers/pixie/pkg/picture"
+	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // Gallery is the interface for engine that runs this service
@@ -156,17 +160,22 @@ func New(config *config.Config) (Gallery, error) {
 		ClientSecret: config.ServiceAuth.ClientSecret,
 	}
 
+	tokenProvider := provider.NewS2sTokenProvider(s2s, s2sCreds, repository, cryptor)
+
 	return &gallery{
 		config:           *config,
 		serverTls:        serverTlsConfig,
 		repository:       repository,
-		s2sTokenProvider: provider.NewS2sTokenProvider(s2s, s2sCreds, repository, cryptor),
+		s2sTokenProvider: tokenProvider,
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
+		patVerifier:      pat.NewVerifier(util.ServiceS2s, s2s, tokenProvider),
 		pictures:         picture.NewService(repository, indexer, cryptor, objStore),
 		patrons:          patron.NewService(repository, indexer, cryptor),
 		permissions:      permission.NewService(repository, indexer, cryptor),
+
+		queue: make(chan storage.WebhookPutObject, 100),
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -185,10 +194,14 @@ type gallery struct {
 	s2sTokenProvider provider.S2sTokenProvider
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
+	patVerifier      pat.Verifier
 	identity         connect.S2sCaller
 	pictures         picture.Service
 	patrons          patron.Service
 	permissions      permission.Service
+
+	queue chan storage.WebhookPutObject
+	wg    sync.WaitGroup
 
 	logger *slog.Logger
 }
@@ -204,6 +217,12 @@ func (g *gallery) CloseDb() error {
 // Run runs the gallery service.
 func (g *gallery) Run() error {
 
+	// image processing pipeline queue
+	imgPipeline := pipeline.NewImagePipeline(g.queue, &g.wg)
+
+	g.wg.Add(1)
+	go imgPipeline.ProcessQueue()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
@@ -214,6 +233,10 @@ func (g *gallery) Run() error {
 
 	// image handlers
 	mux.HandleFunc("/images/", pics.HandleImage) // trailing slash is so slugs can be appended to the path
+
+	// notification handler
+	notify := notification.NewHandler(g.queue, g.s2sVerifier, g.patVerifier)
+	mux.HandleFunc("/images/notify/upload", notify.HandleImageUploadNotification)
 
 	// patron handler
 	pat := patron.NewHandler(g.patrons, g.s2sVerifier, g.iamVerifier)
@@ -240,6 +263,10 @@ func (g *gallery) Run() error {
 			g.logger.Error(fmt.Sprintf("failed to start %s gallery service: %v", g.config.ServiceName, err))
 		}
 	}()
+
+	// wait
+	g.wg.Wait()
+	close(g.queue)
 
 	return nil
 }

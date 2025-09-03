@@ -14,6 +14,9 @@ docker run -d --rm -p $(op read "op://world_site/pixie_service_container_dev/por
     -e PIXIE_OBJECT_STORAGE_BUCKET="$(op read "op://world_site/pixie_minio_dev/bucket")" \
     -e PIXIE_OBJECT_STORAGE_ACCESS_KEY="$(op read "op://world_site/pixie_minio_dev/username")" \
     -e PIXIE_OBJECT_STORAGE_SECRET_KEY="$(op read "op://world_site/pixie_minio_dev/password")" \
+    -e PIXIE_S2S_AUTH_URL="$(op read "op://world_site/ran_service_container_dev/url"):$(op read "op://world_site/ran_service_container_dev/port")" \
+    -e PIXIE_S2S_AUTH_CLIENT_ID="$(op read "op://world_site/pixie_service_container_dev/client_id")" \
+    -e PIXIE_S2S_AUTH_CLIENT_SECRET="$(op read "op://world_site/pixie_service_container_dev/password")" \
     -e PIXIE_DB_CA_CERT="$(op document get "db_ca_dev_cert" --vault world_site | base64 -w 0)" \
     -e PIXIE_DB_CLIENT_CERT="$(op document get "pixie_db_client_dev_cert" --vault world_site | base64 -w 0)" \
     -e PIXIE_DB_CLIENT_KEY="$(op document get "pixie_db_client_dev_key" --vault world_site | base64 -w 0)" \
