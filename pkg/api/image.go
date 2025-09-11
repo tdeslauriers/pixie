@@ -31,6 +31,27 @@ var AllowedFileTypes = []string{
 	"image/svg+xml", // SVG image format
 }
 
+var AllowedExtensions = []string{
+	"jpg",  // JPEG image format
+	"jpeg", // JPEG image format
+	"png",  // PNG image format
+	"gif",  // GIF image format
+	"webp", // WebP image format
+	"tiff", // TIFF image format
+	"bmp",  // BMP image format
+	"svg",  // SVG image format
+}
+
+func IsValidExtension(ext string) bool {
+	ext = strings.ToLower(strings.TrimPrefix(ext, "."))
+	for _, allowedExt := range AllowedExtensions {
+		if ext == allowedExt {
+			return true
+		}
+	}
+	return false
+}
+
 var extensionMap = map[string]string{
 	"image/jpeg":    "jpg",
 	"image/png":     "png",

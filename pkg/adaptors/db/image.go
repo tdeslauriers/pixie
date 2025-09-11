@@ -73,14 +73,7 @@ func (r *ImageRecord) Validate() error {
 	}
 
 	// validate the file type
-	allowed := false
-	for _, allowedType := range api.AllowedFileTypes {
-		if strings.TrimSpace(r.FileType) == allowedType {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
+	if !IsValidFiletype(r.FileType) {
 		return fmt.Errorf("file type must be one of: %s", strings.Join(api.AllowedFileTypes, ", "))
 	}
 
@@ -101,6 +94,18 @@ func (r *ImageRecord) Validate() error {
 	// all the date fields will be set programmatically, so we don't validate them here
 
 	return nil
+}
+
+// IsValidFiletype checks if the provided file type is allowed from a list of accepted types.
+func IsValidFiletype(fileType string) bool {
+	allowed := false
+	for _, allowedType := range api.AllowedFileTypes {
+		if strings.TrimSpace(fileType) == allowedType {
+			allowed = true
+			break
+		}
+	}
+	return allowed
 }
 
 type ImagePermissionXref struct {

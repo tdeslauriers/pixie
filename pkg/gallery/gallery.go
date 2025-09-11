@@ -166,6 +166,9 @@ func New(config *config.Config) (Gallery, error) {
 		config:           *config,
 		serverTls:        serverTlsConfig,
 		repository:       repository,
+		indexer:          indexer,
+		cryptor:          cryptor,
+		objectStorage:    objStore,
 		s2sTokenProvider: tokenProvider,
 		s2sVerifier:      jwt.NewVerifier(config.ServiceName, s2sPublicKey),
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
@@ -191,6 +194,9 @@ type gallery struct {
 	config           config.Config
 	serverTls        *tls.Config
 	repository       data.SqlRepository
+	indexer          data.Indexer
+	cryptor          data.Cryptor
+	objectStorage    storage.ObjectStorage
 	s2sTokenProvider provider.S2sTokenProvider
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
@@ -218,11 +224,12 @@ func (g *gallery) CloseDb() error {
 func (g *gallery) Run() error {
 
 	// image processing pipeline queue
-	imgPipeline := pipeline.NewImagePipeline(g.queue, &g.wg)
+	imgPipeline := pipeline.NewImagePipeline(g.queue, &g.wg, g.repository, g.indexer, g.cryptor, g.objectStorage)
 
 	g.wg.Add(1)
 	go imgPipeline.ProcessQueue()
 
+	// register handlers
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
