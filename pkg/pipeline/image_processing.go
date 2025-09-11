@@ -21,9 +21,6 @@ import (
 	"github.com/tdeslauriers/pixie/pkg/crypt"
 )
 
-// source set resolution widths
-var ResolutionWidths []int = []int{256, 512, 768, 1024, 1536}
-
 // ImagePipline provides methods for processing image files submitted to the pipeline.
 type ImagePipline interface {
 
@@ -157,7 +154,6 @@ func (p *imagePipeline) ProcessQueue() {
 
 			// update the ObjectKey to the new directory
 			img.ObjectKey = fmt.Sprintf("%s/%s%s", dir, slug, ext)
-			fmt.Printf("OBJECT KEY: %s\n", img.ObjectKey)
 
 			// if the exif data contains width, update
 			if meta.Width != 0 {
@@ -181,7 +177,7 @@ func (p *imagePipeline) ProcessQueue() {
 			src = rotateImage(src, meta.Rotation)
 
 			// generate and upload the different resolution images for src set
-			for _, width := range ResolutionWidths {
+			for _, width := range ResolutionWidthsImages {
 
 				// resize the image to the target width, maintaining aspect ratio
 				resized := resizeImageToWidth(src, width)
@@ -194,6 +190,23 @@ func (p *imagePipeline) ProcessQueue() {
 				resizedKey := fmt.Sprintf("%s/%s_w%d%s", filepath.Dir(img.ObjectKey), slug, width, ext)
 				if err := p.objStore.PutObject(resizedKey, encoded, img.FileType); err != nil {
 					return fmt.Errorf("failed to upload resized image %s to object storage: %v", resizedKey, err)
+				}
+			}
+
+			// generate the tiles
+			for _, width := range ResolutionWidthsTiles {
+
+				// resize the image to the target width, maintaining aspect ratio
+				resized := resizeImageToWidth(src, width)
+				encoded, er := encodeToJpeg(resized, JpegQuality)
+				if er != nil {
+					return fmt.Errorf("failed to encode resized image to jpeg for object %s: %v", img.ObjectKey, er)
+				}
+
+				// upload the resized image to object storage in the same directory as the original image
+				tileKey := fmt.Sprintf("%s/%s_tile_w%d%s", filepath.Dir(img.ObjectKey), slug, width, ext)
+				if err := p.objStore.PutObject(tileKey, encoded, img.FileType); err != nil {
+					return fmt.Errorf("failed to upload resized image %s to object storage: %v", tileKey, err)
 				}
 			}
 
