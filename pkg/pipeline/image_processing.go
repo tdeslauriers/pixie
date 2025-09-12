@@ -94,7 +94,7 @@ func (p *imagePipeline) ProcessQueue() {
 
 		// parse and validate the object key to get the slug
 		// the object key is in the format of "directory/{slug}.extension"
-		dir, file, ext, slug, err := p.parseObjectKey(webhook.MinioKey)
+		dir, file, ext, slug, err := ParseObjectKey(webhook.MinioKey)
 		if err != nil {
 			p.logger.Error(fmt.Sprintf("failed to parse object key %s from webhook: %v", webhook.MinioKey, err))
 			continue
@@ -177,7 +177,7 @@ func (p *imagePipeline) ProcessQueue() {
 			src = rotateImage(src, meta.Rotation)
 
 			// generate and upload the different resolution images for src set
-			for _, width := range ResolutionWidthsImages {
+			for _, width := range util.ResolutionWidthsImages {
 
 				// resize the image to the target width, maintaining aspect ratio
 				resized := resizeImageToWidth(src, width)
@@ -194,7 +194,7 @@ func (p *imagePipeline) ProcessQueue() {
 			}
 
 			// generate the tiles
-			for _, width := range ResolutionWidthsTiles {
+			for _, width := range util.ResolutionWidthsTiles {
 
 				// resize the image to the target width, maintaining aspect ratio
 				resized := resizeImageToWidth(src, width)
@@ -251,49 +251,6 @@ func (p *imagePipeline) ProcessQueue() {
 		}
 
 	}
-}
-
-// parseObjectKey is a helper which parses the object key from the webhook
-// to extract the directory, file name, file extension, and slug.
-// Exists to abstract away this logic from the main processing loop.
-func (p *imagePipeline) parseObjectKey(objectKey string) (dir, file, ext, slug string, err error) {
-
-	// validate object key
-	if objectKey == "" {
-		return "", "", "", "", fmt.Errorf("object key is empty")
-	}
-
-	// get the directory from the object key
-	dir = filepath.Dir(objectKey)
-	if dir != "gallerydev/uploads" {
-		return "", "", "", "", fmt.Errorf("invalid directory in object key: %s", objectKey)
-	}
-
-	// drop the bucket name from the directory if it exists
-	if strings.Contains(dir, "/") {
-		parts := strings.SplitN(dir, "/", 2)
-		dir = parts[1]
-	}
-
-	// get the file name from the object key
-	file = filepath.Base(objectKey)
-	if file == "" {
-		return "", "", "", "", fmt.Errorf("file name is empty in object key: %s", objectKey)
-	}
-
-	// get the file extension from the file name
-	ext = filepath.Ext(file)
-	if ext == "" || !api.IsValidExtension(ext) {
-		return "", "", "", "", fmt.Errorf("file extension must not be empty and must be a valid file type: %s", objectKey)
-	}
-
-	// get the slug from the file name
-	slug = strings.TrimSuffix(file, ext)
-	if slug == "" || !validate.IsValidUuid(slug) {
-		return "", "", "", "", fmt.Errorf("invalid slug in object key: %s", objectKey)
-	}
-
-	return dir, file, ext, slug, nil
 }
 
 // getImageRecord is a help retrieves the image record from the database using the provided object key.

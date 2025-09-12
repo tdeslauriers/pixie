@@ -8,24 +8,65 @@ import (
 	"image/jpeg"
 	"io"
 	"math"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rwcarlsen/goexif/exif"
 	"github.com/tdeslauriers/carapace/pkg/storage"
+	"github.com/tdeslauriers/carapace/pkg/validate"
+	"github.com/tdeslauriers/pixie/pkg/api"
 
 	redraw "golang.org/x/image/draw"
-)
-
-// source set resolution widths
-var (
-	ResolutionWidthsImages []int = []int{384, 640, 750, 828, 1200, 1920, 2048, 3840} // nextjs default sizes
-	ResolutionWidthsTiles  []int = []int{64, 128, 256, 384}
 )
 
 const (
 	JpegQuality  int = 85
 	BlurLongSide int = 32 // long side in pixels for blur/placeholder image
 )
+
+// ParseObjectKey is a helper which parses the object key from the webhook
+// to extract the directory, file name, file extension, and slug.
+// Exists to abstract away this logic from the main processing loop.
+func ParseObjectKey(objectKey string) (dir, file, ext, slug string, err error) {
+
+	// validate object key
+	if objectKey == "" {
+		return "", "", "", "", fmt.Errorf("object key is empty")
+	}
+
+	// get the directory from the object key
+	dir = filepath.Dir(objectKey)
+	if dir != "gallerydev/uploads" {
+		return "", "", "", "", fmt.Errorf("invalid directory in object key: %s", objectKey)
+	}
+
+	// drop the bucket name from the directory if it exists
+	if strings.Contains(dir, "/") {
+		parts := strings.SplitN(dir, "/", 2)
+		dir = parts[1]
+	}
+
+	// get the file name from the object key
+	file = filepath.Base(objectKey)
+	if file == "" {
+		return "", "", "", "", fmt.Errorf("file name is empty in object key: %s", objectKey)
+	}
+
+	// get the file extension from the file name
+	ext = filepath.Ext(file)
+	if ext == "" || !api.IsValidExtension(ext) {
+		return "", "", "", "", fmt.Errorf("file extension must not be empty and must be a valid file type: %s", objectKey)
+	}
+
+	// get the slug from the file name
+	slug = strings.TrimSuffix(file, ext)
+	if slug == "" || !validate.IsValidUuid(slug) {
+		return "", "", "", "", fmt.Errorf("invalid slug in object key: %s", objectKey)
+	}
+
+	return dir, file, ext, slug, nil
+}
 
 // Exif represents a subset of the EXIF metadata extracted from an image/picture.
 type Exif struct {

@@ -72,7 +72,7 @@ type ImageData struct {
 	FileName    string `db:"file_name" json:"file_name,omitempty"`   // name of the file with it's extension, eg, "slug.jpg"   // MIME type of the image, eg, "image/jpeg", "image/png"
 	FileType    string `db:"file_type" json:"file_type,omitempty"`   // MIME type of the image, eg, "image/jpeg", "image/png"
 	ObjectKey   string `db:"object_key" json:"object_key,omitempty"` // The key used to store the image in object storage, eg, "2025/slug.jpg"
-	Slug        string `db:"slug" json:"slug,omitempty"`             // ENCRYPTED: a unique slug for the image, used in URLs
+	Slug        string `db:"slug" json:"slug,omitempty"`             // unique slug for the image, used in URLs
 	Width       int    `db:"width" json:"width,omitempty"`           // Width of the image in pixels
 	Height      int    `db:"height" json:"height,omitempty"`         // Height of the image in pixels
 	Size        int64  `db:"size" json:"size,omitempty"`             // Size of the image file in bytes
@@ -82,15 +82,22 @@ type ImageData struct {
 	IsArchived  bool   `db:"is_archived" json:"is_archived"`         // Indicates if the image is archived
 	IsPublished bool   `db:"is_published" json:"is_published"`       // Indicates if the image is published and visible to users
 
-	// can be either the pre-signed PUT URL for uploading the image file
-	// or the pre-signed GET URL for downloading the image file.
+	// pre-signed GET URLs for the browser to access the image in object storage at various resolutions.
 	// This field is dynamically generated and not stored in the database.
 	// NOTE: may need to break this model out into two separate models later
-	SignedUrl string `json:"signed_url,omitempty"` // The signed URL for the image, used to access the image in object storage
+	SignedUrls []SignedUrl `json:"signed_urls,omitempty"` // The signed URL for the image, used to access the image in object storage
+	BlurUrl    string      `json:"blur_url,omitempty"`    // The signed URL for the blurred placeholder image, used for lazy loading in the browser
 
 	// these fields may or may not be present, depending on the context, access, query, etc.
 	Albums      []Album                  `json:"albums,omitempty"`      // Albums to which the image belongs
 	Permissions []permissions.Permission `json:"permissions,omitempty"` // Permissions associated with the image
+}
+
+// SignedUrl represents the model representing the width and signed url for accessing an image in object storage.
+// Its primary purpose is for building srcset for images in the browser.
+type SignedUrl struct {
+	Width     int    `json:"width,omitempty"`      // Width of the image in pixels
+	SignedUrl string `json:"signed_url,omitempty"` // The signed URL for the image, used to access the image in object storage
 }
 
 // AddMetaDataCmd is a command that adds metadata to an image record.
@@ -178,6 +185,24 @@ func (cmd *AddMetaDataCmd) GetExtension() (string, error) {
 	}
 	// If not found, return an error
 	return "", fmt.Errorf("unsupported file type: %s", cmd.FileType)
+}
+
+// Placeholder is a model that represents a placeholder record that is created when an image upload is initiated.
+// It contains the metadata and the signed put url for uploading the image to object storage.
+type Placeholder struct {
+	Id          string `db:"uuid" json:"id,omitempty"`               // Unique identifier for the image record
+	Title       string `db:"title" json:"title"`                     // Title of the image
+	Description string `db:"description" json:"description"`         // Description of the image
+	FileName    string `db:"file_name" json:"file_name,omitempty"`   // name of the file with it's extension, eg, "slug.jpg"   // MIME type of the image, eg, "image/jpeg", "image/png"
+	FileType    string `db:"file_type" json:"file_type,omitempty"`   // MIME type of the image, eg, "image/jpeg", "image/png"
+	ObjectKey   string `db:"object_key" json:"object_key,omitempty"` // The key used to store the image in object storage, eg, "2025/slug.jpg"
+	Slug        string `db:"slug" json:"slug,omitempty"`             // unique slug for the image, used in URLs
+	Size        int64  `db:"size" json:"size,omitempty"`             // Size of the image file in bytes
+	CreatedAt   string `db:"created_at" json:"created_at,omitempty"` // Timestamp when the image was created
+	UpdatedAt   string `db:"updated_at" json:"updated_at,omitempty"` // Timestamp when the image was last updated
+	IsArchived  bool   `db:"is_archived" json:"is_archived"`         // Indicates if the image is archived
+	IsPublished bool   `db:"is_published" json:"is_published"`       // Indicates if the image is published and visible to users
+	SignedUrl   string `json:"signed_url,omitempty"`                 // The signed PUT URL for uploading the image to object storage
 }
 
 // UpdateMetadataCmd is a model that represents the command to update metadata of an image record.

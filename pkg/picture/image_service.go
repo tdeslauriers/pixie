@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
 	"github.com/tdeslauriers/pixie/pkg/crypt"
+	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // ImageService is the interface for the image processing service.
@@ -34,7 +36,7 @@ type ImageService interface {
 	// eg, the id, slug, title, and description provided by the user.
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
-	BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData, error)
+	BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholder, error)
 }
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -137,16 +139,78 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 		return nil, fmt.Errorf("object key for image '%s' is empty", slug)
 	}
 
-	// object key has been decrypted above
-	signedURL, err := s.store.GetSignedUrl(record.ObjectKey)
+	// get the directory of the image object key
+	dir, _, ext, slug, err := pipeline.ParseObjectKey(record.ObjectKey)
 	if err != nil {
-		s.logger.Error(fmt.Sprintf("failed to get signed URL for image %s: %v", slug, err))
-		return nil, err
+		return nil, fmt.Errorf("failed to parse object key for image '%s': %v", slug, err)
 	}
 
-	// if the signed URL is empty, return an error
-	if signedURL == nil || signedURL.String() == "" {
-		return nil, fmt.Errorf("failed to get signed URL for image %s: URL is empty", slug)
+	var (
+		wg sync.WaitGroup
+
+		urlsCh = make(chan api.SignedUrl, len(util.ResolutionWidthsImages)+1)
+		blurCh = make(chan string, 1)
+
+		errCh = make(chan error, len(util.ResolutionWidthsImages)+2)
+	)
+
+	// get the highest resolution signed URL
+	wg.Add(1)
+	go s.getObjectUrl(record.ObjectKey, record.Width, urlsCh, errCh, &wg)
+
+	// get signed URLs for each resolution width
+	for _, width := range util.ResolutionWidthsImages {
+		// build the object key for the resized image
+		resizedKey := fmt.Sprintf("%s/%s_w%d%s", dir, slug, width, ext)
+
+		wg.Add(1)
+		go s.getObjectUrl(resizedKey, width, urlsCh, errCh, &wg)
+	}
+
+	// get the signed URL for the blur placeholder image
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		blurKey := fmt.Sprintf("%s/%s_blur%s", dir, slug, ext)
+
+		url, err := s.store.GetSignedUrl(blurKey)
+		if err != nil {
+			errCh <- fmt.Errorf("failed to get signed URL for blur object key '%s': %v", blurKey, err)
+			return
+		}
+
+		if url == nil || url.String() == "" {
+			errCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
+			return
+		}
+
+		blurCh <- url.String()
+	}()
+
+	// wait for all goroutines to finish
+	wg.Wait()
+	close(urlsCh)
+	close(blurCh)
+	close(errCh)
+
+	// check for errors
+	if len(errCh) > 0 {
+		errMsgs := make([]string, 0, len(errCh))
+		for e := range errCh {
+			errMsgs = append(errMsgs, e.Error())
+		}
+		return nil, fmt.Errorf("failed to get signed URLs for image '%s': %s", slug, strings.Join(errMsgs, "; "))
+	}
+
+	// collect the signed URLs
+	signedURLs := make([]api.SignedUrl, 0, len(urlsCh))
+	for url := range urlsCh {
+		signedURLs = append(signedURLs, url)
+	}
+
+	if len(signedURLs) == 0 {
+		return nil, fmt.Errorf("no signed URLs found for image '%s'", slug)
 	}
 
 	// create the ImageData struct to return
@@ -167,7 +231,8 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 		IsArchived:  record.IsArchived,
 		IsPublished: record.IsPublished,
 
-		SignedUrl: signedURL.String(),
+		SignedUrls: signedURLs,
+		BlurUrl:    <-blurCh,
 	}
 
 	return image, nil
@@ -176,7 +241,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 // BuildPlaceholder is the concrete implementation of the interface method which
 // builds the metadata for a placeholder image from an add image cmd.
 // The image processing pipeline will build the rest of the record upon ingestion of the image file.
-func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData, error) {
+func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholder, error) {
 
 	// validate the created metadata
 	// should be a redundant check, but good practice
@@ -278,7 +343,7 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData,
 	}
 
 	// build image meta data struct to return
-	data := &api.ImageData{
+	data := &api.Placeholder{
 		Id:          record.Id,
 		Title:       record.Title,
 		Description: record.Description,
@@ -293,6 +358,7 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.ImageData,
 		IsPublished: record.IsPublished,
 		SignedUrl:   putUrl.String(), // the pre-signed PUT URL for the browser to upload the image file into object storage
 	}
+
 	return data, nil
 }
 
@@ -369,4 +435,27 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 	}
 
 	return nil
+}
+
+// getObjectUrl is a helper method which generates a signed URL for the provided object key
+// from the object storage service and returns the URL as a string.
+func (s *imageService) getObjectUrl(key string, width int, urlCh chan api.SignedUrl, errCh chan error, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	url, err := s.store.GetSignedUrl(key)
+	if err != nil {
+		errCh <- fmt.Errorf("failed to get signed URL for object key '%s': %v", key, err)
+		return
+	}
+
+	if url == nil || url.String() == "" {
+		errCh <- fmt.Errorf("signed URL for object key '%s' is empty", key)
+		return
+	}
+
+	urlCh <- api.SignedUrl{
+		Width:     width,
+		SignedUrl: url.String(),
+	}
 }
