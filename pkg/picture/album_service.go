@@ -192,50 +192,48 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 		mu        sync.Mutex
 	)
 
-	for i, r := range records {
-		// first check if we already have this album in the map
-		if _, ok := albumsMap[records[i].AlbumId]; !ok {
-			wg.Add(1)
-			go func(r db.AlbumImageRecord, wg *sync.WaitGroup) {
-				defer wg.Done()
+	for _, r := range records {
+		wg.Add(1)
+		go func(r db.AlbumImageRecord, wg *sync.WaitGroup) {
+			defer wg.Done()
 
-				// build the album model from the record
-				album := api.Album{
-					Id:          r.AlbumId,
-					Title:       r.AlbumTitle,
-					Description: r.AlbumDescription,
-					Slug:        r.AlbumSlug,
-					CreatedAt:   r.AlbumCreatedAt,
-					UpdatedAt:   r.AlbumUpdatedAt,
-					IsArchived:  r.AlbumIsArchived,
-					// Images slice will be populated below after additional operations
-				}
-
-				// decrypt the album record
-				if err := s.cryptor.DecryptAlbum(&album); err != nil {
-					errCh <- fmt.Errorf("failed to decrypt album record '%s': %v", album.Id, err)
-					return
-				}
-
-				// build the image model for the album cover
-				// takes only one record, so only one image
-				image, err := s.buildImageData([]db.AlbumImageRecord{r})
-				if err != nil {
-					errCh <- fmt.Errorf("failed to build image data for album '%s': %v", album.Id, err)
-					return
-				}
-
-				// set the image slice on the album
-				album.Images = image
-
-				// add to the map and slice
-				mu.Lock()
-				albumsMap[album.Id] = album
-				albums = append(albums, album)
+			mu.Lock()
+			if _, ok := albumsMap[r.AlbumId]; ok {
 				mu.Unlock()
+				return // already loaded/processed
+			}
+			// mark as seen before unlocking to avoid races
+			albumsMap[r.AlbumId] = api.Album{} // placeholder
+			mu.Unlock()
 
-			}(r, &wg)
-		}
+			// build the album model from the record
+			album := api.Album{
+				Id:          r.AlbumId,
+				Title:       r.AlbumTitle,
+				Description: r.AlbumDescription,
+				Slug:        r.AlbumSlug,
+				CreatedAt:   r.AlbumCreatedAt,
+				UpdatedAt:   r.AlbumUpdatedAt,
+				IsArchived:  r.AlbumIsArchived,
+			}
+
+			if err := s.cryptor.DecryptAlbum(&album); err != nil {
+				errCh <- fmt.Errorf("failed to decrypt album record '%s': %v", album.Id, err)
+				return
+			}
+
+			image, err := s.buildImageData([]db.AlbumImageRecord{r})
+			if err != nil {
+				errCh <- fmt.Errorf("failed to build image data for album '%s': %v", album.Id, err)
+				return
+			}
+			album.Images = image
+
+			mu.Lock()
+			albumsMap[album.Id] = album
+			albums = append(albums, album)
+			mu.Unlock()
+		}(r, &wg)
 	}
 
 	wg.Wait()
