@@ -134,7 +134,7 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, albums, err := h.svc.GetAllowedAlbums(ps)
+	_, albums, err := h.svc.GetAllowedAlbumsData(ps)
 	if err != nil {
 		h.logger.Error(fmt.Sprintf("Failed to retrieve albums for user '%s': %v", authorized.Claims.Subject, err))
 		e := connect.ErrorHttp{

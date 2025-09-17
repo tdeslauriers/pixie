@@ -12,7 +12,7 @@ import (
 	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
-// EncryptAlbumRecord encrypts sensitive fields in the album related structs.
+// AlbumCryptor is an interface which defines methods for encrypting and decrypting
 type AlbumCryptor interface {
 
 	// EncryptAlbumRecord encrypts sensitive fields in the AlbumRecord struct.

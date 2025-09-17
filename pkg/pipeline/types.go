@@ -53,7 +53,7 @@ func ParseObjectKey(objectKey string) (dir, file, ext, slug string, err error) {
 	// get the file extension from the file name
 	ext = filepath.Ext(file)
 	if ext == "" || !api.IsValidExtension(ext) {
-		return "", "", "", "", fmt.Errorf("file extension must not be empty and must be a valid file type: %s", objectKey)
+		return "", "", "", "", fmt.Errorf("file extension must not be empty and must be a valid file type: %s", ext)
 	}
 
 	// get the slug from the file name

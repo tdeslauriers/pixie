@@ -17,6 +17,7 @@ const (
 	ComponentKey = "component"
 
 	ComponentAlbumCryptor        = "album cryptor"
+	ComponentAlbumImageCryptor   = "album image cryptor"
 	ComponentAlbumHandler        = "album handler"
 	ComponentAlbumImageService   = "album image service"
 	ComponentAlbumSerivce        = "album service"

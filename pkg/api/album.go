@@ -28,7 +28,6 @@ type Album struct {
 	CreatedAt   data.CustomTime `json:"created_at,omitempty"`
 	UpdatedAt   data.CustomTime `json:"updated_at,omitempty"`
 	IsArchived  bool            `json:"is_archived"`
-	BlurUrl     string          `json:"blur_url,omitempty"` // URL to the cover image, if any
 	Images      []ImageData     `json:"images,omitempty"`   // image metadata records + their thumbnails signed urls
 }
 

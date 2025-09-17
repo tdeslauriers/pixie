@@ -29,6 +29,11 @@ type AlbumService interface {
 	// Map uses slug since that is the most likely value to be used for lookups.
 	GetAllowedAlbums(psMap map[string]permissions.PermissionRecord) (map[string]db.AlbumRecord, []db.AlbumRecord, error)
 
+	// GetAllowedAlbumsData returns a map ([id]album) and a list of albums that the user is allowed to
+	// view based on their permissions.
+	// Note, these records include a single image record for the album cover.
+	GetAllowedAlbumsData(psMap map[string]permissions.PermissionRecord) (map[string]api.Album, []api.Album, error)
+
 	// GetAlbum returns a specific album record by its slug, and
 	// a slice of the thumbnail images for the album.
 	// Note: username is required to check permissions for each of the album's associated images.
@@ -81,7 +86,7 @@ type albumService struct {
 func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionRecord) (map[string]db.AlbumRecord, []db.AlbumRecord, error) {
 
 	// build album query based on permissions
-	qry, err := db.BuildAlbumSQuery(psMap)
+	qry, err := db.BuildAlbumsQuery(psMap)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build album permission query: %v", err)
 	}
@@ -146,6 +151,108 @@ func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionR
 	}
 
 	return aMap, albums, nil
+}
+
+// GetAllowedAlbumsData implements the Service interface method to retrieve all album-image records a user has permission to view.
+func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.PermissionRecord) (map[string]api.Album, []api.Album, error) {
+
+	// build album query based on permissions
+	qry, err := db.BuildAllAlbumsImagesQuery(psMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build album permission query: %v", err)
+	}
+
+	// convert the permissions map into a variatic slice of interface{}, ie args ...interface{}
+	args := make([]interface{}, 0, len(psMap))
+	// if user is curator, no need to filter by permissions
+	if _, ok := psMap["CURATOR"]; !ok {
+		for _, p := range psMap {
+			args = append(args, p.Id)
+		}
+	}
+
+	// retrieve the album-image records
+	var records []db.AlbumImageRecord
+	if err := s.sql.SelectRecords(qry, &records, args...); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, []api.Album{}, nil
+		} else {
+			return nil, nil, err
+		}
+	}
+
+	// build the albums slice from the records
+	var (
+		wg    sync.WaitGroup
+		errCh = make(chan error, len(records))
+
+		// build the map oppotunistically while looping through the albums for decryption
+		albums    = make([]api.Album, 0, len(records))
+		albumsMap = make(map[string]api.Album, len(records))
+		mu        sync.Mutex
+	)
+
+	for i, r := range records {
+		// first check if we already have this album in the map
+		if _, ok := albumsMap[records[i].AlbumId]; !ok {
+			wg.Add(1)
+			go func(r db.AlbumImageRecord, wg *sync.WaitGroup) {
+				defer wg.Done()
+
+				// build the album model from the record
+				album := api.Album{
+					Id:          r.AlbumId,
+					Title:       r.AlbumTitle,
+					Description: r.AlbumDescription,
+					Slug:        r.AlbumSlug,
+					CreatedAt:   r.AlbumCreatedAt,
+					UpdatedAt:   r.AlbumUpdatedAt,
+					IsArchived:  r.AlbumIsArchived,
+					// Images slice will be populated below after additional operations
+				}
+
+				// decrypt the album record
+				if err := s.cryptor.DecryptAlbum(&album); err != nil {
+					errCh <- fmt.Errorf("failed to decrypt album record '%s': %v", album.Id, err)
+					return
+				}
+
+				// build the image model for the album cover
+				// takes only one record, so only one image
+				image, err := s.buildImageData([]db.AlbumImageRecord{r})
+				if err != nil {
+					errCh <- fmt.Errorf("failed to build image data for album '%s': %v", album.Id, err)
+					return
+				}
+
+				// set the image slice on the album
+				album.Images = image
+
+				// add to the map and slice
+				mu.Lock()
+				albumsMap[album.Id] = album
+				albums = append(albums, album)
+				mu.Unlock()
+
+			}(r, &wg)
+		}
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// return errors if any decryption or build operation failed
+	if len(errCh) > 0 {
+		var errs []error
+		for e := range errCh {
+			errs = append(errs, e)
+		}
+		if len(errs) > 0 {
+			return nil, nil, fmt.Errorf("failed to decrypt one or more album records: %v", errors.Join(errs...))
+		}
+	}
+
+	return albumsMap, albums, nil
 }
 
 // GetAlbumBySlug implements the Service interface method to retrieve a specific album record by its slug.
@@ -238,8 +345,10 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 	// build the image data slice
 	images := make([]api.ImageData, len(records))
 
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(records))
+	var (
+		wg    sync.WaitGroup
+		errCh = make(chan error, len(records))
+	)
 
 	for i, r := range records {
 		wg.Add(1)
@@ -252,8 +361,14 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 				Title:       r.ImageTitle,
 				Description: r.ImageDescription,
 				FileName:    r.FileName,
+				FileType:    r.FileType,
 				ObjectKey:   r.ObjectKey,
 				Slug:        r.ImageSlug,
+				Width:       r.Width,
+				Height:      r.Height,
+				Size:        r.Size,
+				// ImageTargets: to be populated below
+				// BlurUrl: to be populated below
 				ImageDate:   r.ImageDate,
 				CreatedAt:   r.ImageCreatedAt,
 				UpdatedAt:   r.ImageUpdatedAt,
@@ -275,9 +390,9 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			}
 
 			// get the directory of the image object key
-			dir, _, ext, slug, err := pipeline.ParseObjectKey(r.ObjectKey)
+			dir, _, ext, slug, err := pipeline.ParseObjectKey(img.ObjectKey)
 			if err != nil {
-				errCh <- fmt.Errorf("failed to parse object key '%s': %v", r.ObjectKey, err)
+				errCh <- fmt.Errorf("failed to parse object key '%s': %v", img.ObjectKey, err)
 				return
 			}
 
@@ -285,10 +400,10 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			var (
 				urlWg sync.WaitGroup
 
-				targetsCh = make(chan api.ImageTarget, len(util.ResolutionWidthsImages)+1)
+				targetsCh = make(chan api.ImageTarget, len(util.ResolutionWidthsTiles)+1)
 				blurCh    = make(chan string, 1)
 
-				urlErrCh = make(chan error, len(util.ResolutionWidthsImages)+2)
+				urlErrCh = make(chan error, len(util.ResolutionWidthsTiles)+2)
 			)
 
 			// get signed URLs for each resolution width
@@ -296,14 +411,14 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 				// build the object key for the resized image
 				resizedKey := fmt.Sprintf("%s/%s_tile_w%d%s", dir, slug, width, ext)
 
-				wg.Add(1)
+				urlWg.Add(1)
 				go s.getObjectUrl(resizedKey, width, targetsCh, urlErrCh, &urlWg)
 			}
 
 			// get the signed URL for the blur placeholder image
-			wg.Add(1)
+			urlWg.Add(1)
 			go func() {
-				defer wg.Done()
+				defer urlWg.Done()
 
 				blurKey := fmt.Sprintf("%s/%s_blur%s", dir, slug, ext)
 
@@ -377,6 +492,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 	}
 
 	// return the images slice
+
 	return images, nil
 }
 
@@ -538,7 +654,7 @@ func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
 
 // getObjectUrl is a helper method which generates a signed URL for the provided object key
 // from the object storage service and returns the URL as a string.
-func (s *albumService) getObjectUrl(key string, width int, urlCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
+func (s *albumService) getObjectUrl(key string, width int, targetCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -553,7 +669,7 @@ func (s *albumService) getObjectUrl(key string, width int, urlCh chan api.ImageT
 		return
 	}
 
-	urlCh <- api.ImageTarget{
+	targetCh <- api.ImageTarget{
 		Width:     width,
 		SignedUrl: url.String(),
 	}
