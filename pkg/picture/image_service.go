@@ -148,7 +148,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 	var (
 		wg sync.WaitGroup
 
-		urlsCh = make(chan api.SignedUrl, len(util.ResolutionWidthsImages)+1)
+		urlsCh = make(chan api.ImageTarget, len(util.ResolutionWidthsImages)+1)
 		blurCh = make(chan string, 1)
 
 		errCh = make(chan error, len(util.ResolutionWidthsImages)+2)
@@ -204,7 +204,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 	}
 
 	// collect the signed URLs
-	signedURLs := make([]api.SignedUrl, 0, len(urlsCh))
+	signedURLs := make([]api.ImageTarget, 0, len(urlsCh))
 	for url := range urlsCh {
 		signedURLs = append(signedURLs, url)
 	}
@@ -231,8 +231,8 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 		IsArchived:  record.IsArchived,
 		IsPublished: record.IsPublished,
 
-		SignedUrls: signedURLs,
-		BlurUrl:    <-blurCh,
+		ImageTargets: signedURLs,
+		BlurUrl:      <-blurCh,
 	}
 
 	return image, nil
@@ -439,7 +439,7 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 
 // getObjectUrl is a helper method which generates a signed URL for the provided object key
 // from the object storage service and returns the URL as a string.
-func (s *imageService) getObjectUrl(key string, width int, urlCh chan api.SignedUrl, errCh chan error, wg *sync.WaitGroup) {
+func (s *imageService) getObjectUrl(key string, width int, urlCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -454,7 +454,7 @@ func (s *imageService) getObjectUrl(key string, width int, urlCh chan api.Signed
 		return
 	}
 
-	urlCh <- api.SignedUrl{
+	urlCh <- api.ImageTarget{
 		Width:     width,
 		SignedUrl: url.String(),
 	}

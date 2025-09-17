@@ -18,6 +18,7 @@ import (
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
 	"github.com/tdeslauriers/pixie/pkg/crypt"
+	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // AlbumService is an interface for methods that manage album records.
@@ -273,21 +274,86 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 				return
 			}
 
-			// get a presigned URL for the thumbnail image
-			url, err := s.store.GetSignedUrl(fmt.Sprintf("%s_thumbnail", img.ObjectKey))
+			// get the directory of the image object key
+			dir, _, ext, slug, err := pipeline.ParseObjectKey(r.ObjectKey)
 			if err != nil {
-				if strings.Contains(err.Error(), "does not exist") {
-					s.logger.Warn(fmt.Sprintf("thumbnail image for image '%s', filename '%s' does not exist in object storage", img.Id, img.FileName))
-				} else {
-					errCh <- fmt.Errorf("failed to get presigned URL for image '%s', filename '%s' record's thumbnail: %v", img.Id, img.FileName, err)
-					return
-				}
+				errCh <- fmt.Errorf("failed to parse object key '%s': %v", r.ObjectKey, err)
+				return
 			}
 
-			// if the url is empty, skip setting it on the image data
-			if url != nil {
-				// set the signed thumbnail URL in the image data
-				img.SignedUrl = url.String()
+			// get the presigned urls for the thumbnails/tiles images
+			var (
+				urlWg sync.WaitGroup
+
+				targetsCh = make(chan api.ImageTarget, len(util.ResolutionWidthsImages)+1)
+				blurCh    = make(chan string, 1)
+
+				urlErrCh = make(chan error, len(util.ResolutionWidthsImages)+2)
+			)
+
+			// get signed URLs for each resolution width
+			for _, width := range util.ResolutionWidthsTiles {
+				// build the object key for the resized image
+				resizedKey := fmt.Sprintf("%s/%s_tile_w%d%s", dir, slug, width, ext)
+
+				wg.Add(1)
+				go s.getObjectUrl(resizedKey, width, targetsCh, urlErrCh, &urlWg)
+			}
+
+			// get the signed URL for the blur placeholder image
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				blurKey := fmt.Sprintf("%s/%s_blur%s", dir, slug, ext)
+
+				url, err := s.store.GetSignedUrl(blurKey)
+				if err != nil {
+					urlErrCh <- fmt.Errorf("failed to get signed URL for blur object key '%s': %v", blurKey, err)
+					return
+				}
+
+				if url == nil || url.String() == "" {
+					urlErrCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
+					return
+				}
+
+				blurCh <- url.String()
+			}()
+
+			// wait for all goroutines to finish
+			urlWg.Wait()
+			close(targetsCh)
+			close(blurCh)
+			close(urlErrCh)
+
+			// check for errors
+			if len(urlErrCh) > 0 {
+				errMsgs := make([]string, 0, len(errCh))
+				for e := range urlErrCh {
+					errMsgs = append(errMsgs, e.Error())
+				}
+				errCh <- fmt.Errorf("failed to get signed URLs for image '%s': %v", img.Id, strings.Join(errMsgs, "; "))
+			}
+
+			// collect the signed URLs
+			targets := make([]api.ImageTarget, 0, len(targetsCh))
+			for target := range targetsCh {
+				targets = append(targets, target)
+			}
+
+			// set the signed URLs on the image data
+			if len(targets) > 0 {
+				img.ImageTargets = targets
+			} else {
+				errCh <- fmt.Errorf("no signed URLs found for image '%s'", img.Id)
+			}
+
+			// set the blur URL on the image data
+			if len(blurCh) > 0 {
+				img.BlurUrl = <-blurCh
+			} else {
+				errCh <- fmt.Errorf("no blur URL found for image '%s'", img.Id)
 			}
 
 			// set the image data in the slice
@@ -468,4 +534,27 @@ func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
 	}
 
 	return nil
+}
+
+// getObjectUrl is a helper method which generates a signed URL for the provided object key
+// from the object storage service and returns the URL as a string.
+func (s *albumService) getObjectUrl(key string, width int, urlCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	url, err := s.store.GetSignedUrl(key)
+	if err != nil {
+		errCh <- fmt.Errorf("failed to get signed URL for object key '%s': %v", key, err)
+		return
+	}
+
+	if url == nil || url.String() == "" {
+		errCh <- fmt.Errorf("signed URL for object key '%s' is empty", key)
+		return
+	}
+
+	urlCh <- api.ImageTarget{
+		Width:     width,
+		SignedUrl: url.String(),
+	}
 }

@@ -37,9 +37,6 @@ func ParseObjectKey(objectKey string) (dir, file, ext, slug string, err error) {
 
 	// get the directory from the object key
 	dir = filepath.Dir(objectKey)
-	if dir != "gallerydev/uploads" {
-		return "", "", "", "", fmt.Errorf("invalid directory in object key: %s", objectKey)
-	}
 
 	// drop the bucket name from the directory if it exists
 	if strings.Contains(dir, "/") {
@@ -155,7 +152,7 @@ func ReadExif(r storage.ReadSeekCloser) (*Exif, error) {
 // tagToInt is a helper to convert exif tag strings to ints
 func tagToInt(tag exif.FieldName, x *exif.Exif) (int, bool) {
 
-	if t, err := x.Get(tag); err != nil && t != nil {
+	if t, err := x.Get(tag); err == nil && t != nil {
 
 		if i, err := t.Int(0); err == nil {
 			return i, true
@@ -215,13 +212,13 @@ func rotateImage(src image.Image, degrees int) image.Image {
 func rotate90(src image.Image) image.Image {
 
 	// get image bounds
-	bounds := src.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
 
 	dst := image.NewRGBA(image.Rect(0, 0, h, w))
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			dst.Set(w-1-x, h-1-y, src.At(bounds.Min.X+x, bounds.Min.Y+y))
+			dst.Set(h-1-y, x, src.At(b.Min.X+x, b.Min.Y+y))
 		}
 	}
 
@@ -249,13 +246,13 @@ func rotate180(src image.Image) image.Image {
 func rotate270(src image.Image) image.Image {
 
 	// get image bounds
-	bounds := src.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
 
 	dst := image.NewRGBA(image.Rect(0, 0, h, w))
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			dst.Set(y, w-1-x, src.At(bounds.Min.X+x, bounds.Min.Y+y))
+			dst.Set(y, w-1-x, src.At(b.Min.X+x, b.Min.Y+y))
 		}
 	}
 

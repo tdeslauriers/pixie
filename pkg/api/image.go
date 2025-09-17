@@ -84,18 +84,18 @@ type ImageData struct {
 
 	// pre-signed GET URLs for the browser to access the image in object storage at various resolutions.
 	// This field is dynamically generated and not stored in the database.
-	// NOTE: may need to break this model out into two separate models later
-	SignedUrls []SignedUrl `json:"signed_urls,omitempty"` // The signed URL for the image, used to access the image in object storage
-	BlurUrl    string      `json:"blur_url,omitempty"`    // The signed URL for the blurred placeholder image, used for lazy loading in the browser
+	// Note, this could be thumbnail tiles or larger images, or both, depending on the request context.
+	ImageTargets []ImageTarget `json:"image_targets,omitempty"` // The signed URL for the image, used to access the image in object storage
+	BlurUrl      string        `json:"blur_url,omitempty"`      // The signed URL for the blurred placeholder image, used for lazy loading in the browser
 
 	// these fields may or may not be present, depending on the context, access, query, etc.
 	Albums      []Album                  `json:"albums,omitempty"`      // Albums to which the image belongs
 	Permissions []permissions.Permission `json:"permissions,omitempty"` // Permissions associated with the image
 }
 
-// SignedUrl represents the model representing the width and signed url for accessing an image in object storage.
+// ImageTarget represents the model representing the width and signed url for accessing an image in object storage.
 // Its primary purpose is for building srcset for images in the browser.
-type SignedUrl struct {
+type ImageTarget struct {
 	Width     int    `json:"width,omitempty"`      // Width of the image in pixels
 	SignedUrl string `json:"signed_url,omitempty"` // The signed URL for the image, used to access the image in object storage
 }
