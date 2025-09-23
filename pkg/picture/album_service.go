@@ -187,8 +187,8 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 		errCh = make(chan error, len(records))
 
 		// build the map oppotunistically while looping through the albums for decryption
-		albums    = make([]api.Album, 0, len(records))
 		albumsMap = make(map[string]api.Album, len(records))
+		albums    = make([]api.Album, 0, len(records))
 		mu        sync.Mutex
 	)
 
@@ -206,7 +206,7 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 			albumsMap[r.AlbumId] = api.Album{} // placeholder
 			mu.Unlock()
 
-			// build the album model from the record
+			// // build the album model from the record
 			album := api.Album{
 				Id:          r.AlbumId,
 				Title:       r.AlbumTitle,
@@ -222,12 +222,16 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 				return
 			}
 
-			image, err := s.buildImageData([]db.AlbumImageRecord{r})
-			if err != nil {
-				errCh <- fmt.Errorf("failed to build image data for album '%s': %v", album.Id, err)
-				return
+			// // check if image fields are present
+			// for CURATOR, may have albums with no images
+			if r.ImageId != "" {
+				image, err := s.buildImageData([]db.AlbumImageRecord{r})
+				if err != nil {
+					errCh <- fmt.Errorf("failed to build image data for album '%s': %v", album.Id, err)
+					return
+				}
+				album.Images = image
 			}
-			album.Images = image
 
 			mu.Lock()
 			albumsMap[album.Id] = album
@@ -246,7 +250,7 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 			errs = append(errs, e)
 		}
 		if len(errs) > 0 {
-			return nil, nil, fmt.Errorf("failed to decrypt one or more album records: %v", errors.Join(errs...))
+			return nil, nil, fmt.Errorf("failed build album + image data: %v", errors.Join(errs...))
 		}
 	}
 
@@ -377,7 +381,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			// possible all fields will be empty if no images are attached to the album
 			// if the id is empty, very likely all fields are empty
 			if img.Id == "" {
-				s.logger.Warn(fmt.Sprintf("image index[%i] fields are empty for album %s", r.AlbumTitle))
+				s.logger.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s", i, r.AlbumTitle))
 				return
 			}
 
@@ -396,38 +400,39 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 
 			// get the presigned urls for the thumbnails/tiles images
 			var (
-				urlWg sync.WaitGroup
+				targetsWg sync.WaitGroup
 
-				targetsCh = make(chan api.ImageTarget, len(util.ResolutionWidthsTiles)+1)
+				targetsCh = make(chan api.ImageTarget, len(util.ResolutionWidthsTiles))
 				blurCh    = make(chan string, 1)
 
-				urlErrCh = make(chan error, len(util.ResolutionWidthsTiles)+2)
+				targetsErrCh = make(chan error, len(util.ResolutionWidthsTiles)+1) // +1 for the blur url
 			)
 
 			// get signed URLs for each resolution width
-			for _, width := range util.ResolutionWidthsTiles {
+			for i, width := range util.ResolutionWidthsTiles {
+
 				// build the object key for the resized image
 				resizedKey := fmt.Sprintf("%s/%s_tile_w%d%s", dir, slug, width, ext)
 
-				urlWg.Add(1)
-				go s.getObjectUrl(resizedKey, width, targetsCh, urlErrCh, &urlWg)
+				targetsWg.Add(1)
+				go s.getObjectUrl(resizedKey, width, targetsCh, targetsErrCh, &targetsWg)
 			}
 
 			// get the signed URL for the blur placeholder image
-			urlWg.Add(1)
+			targetsWg.Add(1)
 			go func() {
-				defer urlWg.Done()
+				defer targetsWg.Done()
 
 				blurKey := fmt.Sprintf("%s/%s_blur%s", dir, slug, ext)
 
 				url, err := s.store.GetSignedUrl(blurKey)
 				if err != nil {
-					urlErrCh <- fmt.Errorf("failed to get signed URL for blur object key '%s': %v", blurKey, err)
+					s.logger.Error("failed to get signed URL for blur object key '%s': %v", blurKey, err)
 					return
 				}
 
 				if url == nil || url.String() == "" {
-					urlErrCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
+					targetsErrCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
 					return
 				}
 
@@ -435,18 +440,21 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			}()
 
 			// wait for all goroutines to finish
-			urlWg.Wait()
+			targetsWg.Wait()
 			close(targetsCh)
 			close(blurCh)
-			close(urlErrCh)
+			close(targetsErrCh)
 
 			// check for errors
-			if len(urlErrCh) > 0 {
+			// will only log errors since this could be a result of image pipeline failure
+			// front end will need to gracefully handle missing images
+			if len(targetsErrCh) > 0 {
 				errMsgs := make([]string, 0, len(errCh))
-				for e := range urlErrCh {
+				for e := range targetsErrCh {
 					errMsgs = append(errMsgs, e.Error())
 				}
-				errCh <- fmt.Errorf("failed to get signed URLs for image '%s': %v", img.Id, strings.Join(errMsgs, "; "))
+				s.logger.Error(fmt.Sprintf("one or more errors occurred while getting signed URLs for image '%s': %s", img.Id, strings.Join(errMsgs, "; ")))
+				return
 			}
 
 			// collect the signed URLs
@@ -456,17 +464,21 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			}
 
 			// set the signed URLs on the image data
+			// will only log errors since this could be a result of image pipeline failure
+			// front end will need to gracefully handle missing images
 			if len(targets) > 0 {
 				img.ImageTargets = targets
 			} else {
-				errCh <- fmt.Errorf("no signed URLs found for image '%s'", img.Id)
+				s.logger.Error(fmt.Sprintf("no image signed url targets found for image '%s'", img.Id))
 			}
 
 			// set the blur URL on the image data
+			// will only log errors since this could be a result of image pipeline failure
+			// front end will need to gracefully handle missing images
 			if len(blurCh) > 0 {
 				img.BlurUrl = <-blurCh
 			} else {
-				errCh <- fmt.Errorf("no blur URL found for image '%s'", img.Id)
+				s.logger.Error(fmt.Sprintf("no blur signed url found for image '%s'", img.Id))
 			}
 
 			// set the image data in the slice
@@ -479,6 +491,8 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 	close(errCh)
 
 	// check for errors during decryption and URL generation
+	// the only errors that should be here are decryption errors
+	// as URL generation errors are logged above
 	if len(errCh) > 0 {
 		var errs []error
 		for e := range errCh {
@@ -490,7 +504,6 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 	}
 
 	// return the images slice
-
 	return images, nil
 }
 
@@ -671,4 +684,5 @@ func (s *albumService) getObjectUrl(key string, width int, targetCh chan api.Ima
 		Width:     width,
 		SignedUrl: url.String(),
 	}
+
 }

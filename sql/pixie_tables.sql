@@ -41,8 +41,8 @@ CREATE TABLE permission (
     description VARCHAR(512) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT UTC_TIMESTAMP,
     active BOOLEAN NOT NULL,
-    slug CHAR(128) NOT NULL
-    slug_index CHAR(128) NOT NULL,
+    slug CHAR(128) NOT NULL,
+    slug_index CHAR(128) NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_permission_slug_index ON permission (slug_index);
 
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS image_permission (
     image_uuid CHAR(36) NOT NULL,
     permission_uuid CHAR(36) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT UTC_TIMESTAMP,
-    CONSTRAINT fk_image_permission_image_uuid FOREIGN KEY (image_uuid) REFERENCES image(uuid),
+    CONSTRAINT fk_image_permission_uuid FOREIGN KEY (image_uuid) REFERENCES image(uuid),
     CONSTRAINT fk_permission_image_uuid FOREIGN KEY (permission_uuid) REFERENCES permission(uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_image_permission ON image_permission (image_uuid);

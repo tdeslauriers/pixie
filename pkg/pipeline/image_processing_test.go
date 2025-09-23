@@ -8,15 +8,15 @@ import (
 
 func TestFilenameParse(t *testing.T) {
 
-	input := "gallerydev/uploads/testtest-uuid-uuid-uuid-testuuidtest.jpg"
+	input := "gallery-images/uploads/testtest-uuid-uuid-uuid-testuuidtest.jpg"
 
 	dir := filepath.Dir(input)
 	file := filepath.Base(input)
 	ext := filepath.Ext(file)
 	slug := strings.TrimSuffix(file, ext)
 
-	if dir != "gallerydev/uploads" {
-		t.Errorf("expected dir to be 'gallerydev/uploads', got '%s'", dir)
+	if dir != "gallery-images/uploads" {
+		t.Errorf("expected dir to be 'gallery-images/uploads', got '%s'", dir)
 	}
 
 	if file != "testtest-uuid-uuid-uuid-testuuidtest.jpg" {
