@@ -484,7 +484,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *db.ImageRecord) error {
 				created_at,
 				updated_at,
 				is_archived
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		if err := p.db.InsertRecord(qry, newAlbum); err != nil {
 			return fmt.Errorf("failed to insert new album record for album with title %s: %v", title, err)
 		}
@@ -500,7 +500,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *db.ImageRecord) error {
 			album_uuid,
 			image_uuid,
 			created_at
-		) VALUES (?, ?, ?, ?);`
+		) VALUES (?, ?, ?, ?)`
 	xref := db.AlbumImageXref{
 		Id:        0,
 		AlbumId:   albumId,

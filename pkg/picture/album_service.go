@@ -409,7 +409,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			)
 
 			// get signed URLs for each resolution width
-			for i, width := range util.ResolutionWidthsTiles {
+			for _, width := range util.ResolutionWidthsTiles {
 
 				// build the object key for the resized image
 				resizedKey := fmt.Sprintf("%s/%s_tile_w%d%s", dir, slug, width, ext)

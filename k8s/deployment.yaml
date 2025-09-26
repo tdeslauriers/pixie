@@ -1,0 +1,159 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pixie
+  namespace: world
+  labels:
+    app: pixie
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pixie
+  template:
+    metadata:
+      labels:
+        app: pixie
+    spec:
+      containers:
+        - name: pixie
+          image: tdeslauriers/pixie:latest
+          ports:
+            - containerPort: 8443
+          env:
+            - name: GOMEMLIMIT
+              value: "1800MiB" # ~90% of 2Gi limit; tune after observing
+            - name: GOGC
+              value: "100"
+            - name: PIXIE_SERVICE_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-gallery-service
+                  key: gallery-client-id
+            - name: PIXIE_SERVICE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-gallery-service
+                  key: gallery-port
+            - name: PIXIE_CA_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: secret-server-ca-prod
+                  key: server-ca-cert
+            - name: PIXIE_SERVER_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: secret-pixie-server-cert
+                  key: server-cert
+            - name: PIXIE_SERVER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-pixie-server-cert
+                  key: server-key
+            - name: PIXIE_CLIENT_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: secret-pixie-client-cert
+                  key: client-cert
+            - name: PIXIE_CLIENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-pixie-client-cert
+                  key: client-key
+            - name: PIXIE_OBJECT_STORAGE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-object-storage
+                  key: S3_ENDPOINT
+            - name: PIXIE_OBJECT_STORAGE_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-object-storage
+                  key: S3_BUCKET
+            - name: PIXIE_OBJECT_STORAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-object-storage
+                  key: ACCESS_KEY
+            - name: PIXIE_OBJECT_STORAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-object-storage
+                  key: SECRET_KEY
+            - name: PIXIE_S2S_AUTH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-s2s-service
+                  key: s2s-auth-url
+            - name: PIXIE_S2S_AUTH_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-gallery-service
+                  key: gallery-client-id
+            - name: PIXIE_S2S_AUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-s2s-client-creds
+                  key: s2s-auth-client-secret
+            - name: PIXIE_DB_CA_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: secret-db-ca-prod
+                  key: db-ca-cert
+            - name: PIXIE_DB_CLIENT_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: secret-pixie-db-client-cert
+                  key: client-cert
+            - name: PIXIE_DB_CLIENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-pixie-db-client-cert
+                  key: client-key
+            - name: PIXIE_DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-gallery-db
+                  key: db-url
+            - name: PIXIE_DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-gallery-db
+                  key: db-name
+            - name: PIXIE_DATABASE_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: cm-gallery-db
+                  key: db-username
+            - name: PIXIE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-db
+                  key: db-password
+            - name: PIXIE_DATABASE_HMAC_INDEX_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-db
+                  key: hmac-index-secret
+            - name: PIXIE_FIELD_LEVEL_AES_GCM_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: secret-gallery-db
+                  key: aes-gcm-secret
+            - name: PIXIE_S2S_JWT_VERIFYING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-s2s-jwt-signing
+                  key: jwt-verifying-key
+            - name: PIXIE_USER_JWT_VERIFYING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secret-identity-jwt-signing
+                  key: jwt-verifying-key
+          resources:
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+            requests:
+              cpu: "500m"
+              memory: "1Gi"

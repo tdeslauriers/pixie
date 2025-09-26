@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evanoberholster/imagemeta"
 	"github.com/rwcarlsen/goexif/exif"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -80,8 +81,8 @@ type Exif struct {
 	Rotation int `json:"rotation,omitempty"`
 
 	// optional GPS coordinates -> not often present in images
-	Latitude  float64 `json:"latitude,omitempty"`
-	Longitude float64 `json:"longitude,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
 }
 
 // ReadExif is a function type that defines the signature for reading
@@ -89,58 +90,49 @@ type Exif struct {
 // If not exif data is found, returns an empty Exif struct and no error.
 func ReadExif(r storage.ReadSeekCloser) (*Exif, error) {
 
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to rewind reader: %v", err)
+	}
+
 	meta := &Exif{}
 
 	// not all images have exif data, jpeg and tiff are the most common
 	// png and gif typically do not have exif data
 	// if no exif data, return empty meta struct and no error
-	if x, err := exif.Decode(r); err == nil && x != nil {
+	if ex, err := imagemeta.Decode(r); err == nil {
 
-		// get the best effort date time -> DateTimeOriginal, DateTimeDigitized, DateTime
-		if datetime, err := x.DateTime(); err == nil {
-			// set the taken at time
-			meta.TakenAt = &datetime
+		// get the datetime original
+		if dt := ex.DateTimeOriginal(); !dt.IsZero() {
+			meta.TakenAt = &dt
 		}
 
-		// get the orientationa and convert to rotation in degrees
-		if orient, ok := tagToInt(exif.Orientation, x); ok {
-			meta.Rotation = convertToDegrees(orient)
+		// if datetime original is not present, try datetime digitized
+		if meta.TakenAt == nil {
+			if dt := ex.CreateDate(); !dt.IsZero() {
+				meta.TakenAt = &dt
+			}
 		}
 
-		// gps coordinates will not be present in most images
-		if lat, lon, err := x.LatLong(); err == nil {
-			// set the gps coordinates
-			meta.Latitude = lat
-			meta.Longitude = lon
+		// get the rotation from orientation tag
+		if orientation := ex.Orientation; orientation != 0 {
+			meta.Rotation = convertToDegrees(int(orientation))
 		}
 
-		// get the pixel dimensions
-		if width, ok := tagToInt(exif.PixelXDimension, x); ok {
-			meta.Width = width
-		}
-
-		if height, ok := tagToInt(exif.PixelYDimension, x); ok {
-			meta.Height = height
-		}
-
-		// get the orientation and convert to rotation in degrees
-		if orientation, ok := tagToInt(exif.Orientation, x); ok {
-			meta.Rotation = convertToDegrees(orientation)
+		// get the GPS coordinates if present --> not using them currently, but could be useful later
+		if g := ex.GPS; g.Latitude() != 0 || g.Longitude() != 0 {
+			lat := float64(g.Latitude())
+			lon := float64(g.Longitude())
+			meta.Latitude, meta.Longitude = &lat, &lon
 		}
 	}
 
-	// check if exif data was found -> we can get width and height from image config
-	if meta.Width == 0 || meta.Height == 0 {
+	// rewind the reader to read the image config
+	_, _ = r.Seek(0, io.SeekStart)
 
-		// rewind the reader to read the image config
-		_, _ = r.Seek(0, io.SeekStart)
-
-		// decode image config to get width and height
-		if config, _, err := image.DecodeConfig(r); err == nil {
-			meta.Width = config.Width
-			meta.Height = config.Height
-		}
-
+	// decode image config to get width and height
+	if config, _, err := image.DecodeConfig(r); err == nil {
+		meta.Width = config.Width
+		meta.Height = config.Height
 	}
 
 	// rewind the reader to read the image config

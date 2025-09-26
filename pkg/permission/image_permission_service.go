@@ -95,6 +95,7 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 	// decrypt and create a map of permissions
 	var (
 		wg    sync.WaitGroup
+		mu    sync.Mutex
 		errCh = make(chan error, len(records))
 	)
 
@@ -109,8 +110,12 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 				errCh <- fmt.Errorf("failed to decrypt permission '%s': %v", record.Id, err)
 				return
 			}
+
 			records[i] = *decrypted
+
+			mu.Lock()
 			psMap[decrypted.Permission] = *decrypted
+			mu.Unlock()
 		}(i)
 	}
 
@@ -166,9 +171,9 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 	var (
 		decryptWg    sync.WaitGroup
 		decryptErrCh = make(chan error, len(records))
+		allPsMap     = make(map[string]exo.PermissionRecord, len(records))
+		decryptMu    sync.Mutex
 	)
-	allPsMap := make(map[string]exo.PermissionRecord, len(records))
-	decryptMu := &sync.Mutex{}
 
 	for i, record := range records {
 		decryptWg.Add(1)
@@ -203,10 +208,11 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 	}
 
 	// build a map of the new permissions to be associated with the image
+	// NOTE: map key must be the permission to match the return map of the GetImagePermissions method
 	newPsMap := make(map[string]exo.PermissionRecord, len(permissionSlugs))
 	for _, slug := range permissionSlugs {
 		if p, exists := allPsMap[slug]; exists {
-			newPsMap[slug] = p
+			newPsMap[p.Permission] = p
 		} else {
 			return fmt.Errorf("permission slug '%s' does not exist", slug)
 		}
@@ -229,15 +235,17 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 	)
 
 	// build toAdd slice
-	for slug, p := range newPsMap {
-		if _, exists := currentPsMap[slug]; !exists {
+	// Note: currentPsMap is keyed by permission field, so need to check existence by that key
+	for _, p := range newPsMap {
+		if _, exists := currentPsMap[p.Permission]; !exists {
 			toAdd = append(toAdd, p)
 		}
 	}
 
 	// build toRemove slice
-	for slug, p := range currentPsMap {
-		if _, exists := newPsMap[slug]; !exists {
+	// Note: newPsMap is keyed by permission field, so need to check existence by that key
+	for _, p := range currentPsMap {
+		if _, exists := newPsMap[p.Permission]; !exists {
 			toRemove = append(toRemove, p)
 		}
 	}

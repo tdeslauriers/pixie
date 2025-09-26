@@ -112,7 +112,7 @@ func BuildAlbumsQuery(ps map[string]permissions.PermissionRecord) (string, error
 }
 
 const AlbumImageQueryBase string = `
-	SELECT
+	SELECT DISTINCT
 		a.uuid AS album_uuid,
 		a.title AS album_title,
 		a.description AS album_description,
@@ -228,7 +228,7 @@ func BuildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 		WHERE a.slug_index = ?`)
 
 	if _, ok := ps["CURATOR"]; !ok {
-		qb.WriteString(`AND ip.permission_uuid IN (`)
+		qb.WriteString(` AND ip.permission_uuid IN (`)
 		i := 0
 		for range ps {
 			if i > 0 {
