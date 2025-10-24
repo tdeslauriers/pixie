@@ -251,6 +251,27 @@ func BuildAlbumImagesQuery(ps map[string]permissions.PermissionRecord) (string, 
 	return qb.String(), nil
 }
 
+// BuildAlbumExistsQuery builds a query to check if an album exists by its slug index.
+func BuildAlbumExistsQuery() string {
+	return `
+		SELECT EXISTS (
+			SELECT 1
+			FROM album
+			WHERE slug_index = ?
+		)`
+}
+
+// BuildIsArchivedAlbumQuery builds a query to check if an album is archived by its slug index.
+func BuildIsArchivedAlbumQuery() string {
+	return `
+		SELECT EXISTS (
+			SELECT 1
+			FROM album
+			WHERE slug_index = ? 
+				AND is_archived = TRUE
+		)`
+}
+
 // AlbumImageXref is a model which represents a record in the album_image cross-reference table.
 type AlbumImageXref struct {
 	Id        int             `db:"id"`

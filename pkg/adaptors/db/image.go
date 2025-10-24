@@ -91,7 +91,7 @@ func (r *ImageRecord) Validate() error {
 		return fmt.Errorf("image height must be a positive integer")
 	}
 
-	// all the date fields will be set programmatically, so we don't validate them here
+	
 
 	return nil
 }
@@ -171,6 +171,25 @@ func BuildGetImageQuery(userPs map[string]permissions.PermissionRecord) string {
 	return qb.String()
 }
 
+// BuildImageExistsQry builds an SQL query to check if an image exists based on its slug.
+// It returns the query string and any parameters to be used in the query.
+// Note: at the moment, no params are needed or constructed, but this may change in the future.
+func BuildImageExistsQry() string {
+	var qb strings.Builder
+
+	// base query to check if the image exists
+	baseQry := `
+		SELECT EXISTS (
+			SELECT 1 
+			FROM image i
+			WHERE i.slug_index = ?`
+	qb.WriteString(baseQry)
+
+	qb.WriteString(")")
+
+	return qb.String()
+}
+
 // BuildImagePermissionsQry builds an sql query to check if an image exists but the user does not have permissions.
 func BuildImagePermissionsQry(userPs map[string]permissions.PermissionRecord) string {
 	var qb strings.Builder
@@ -185,7 +204,7 @@ func BuildImagePermissionsQry(userPs map[string]permissions.PermissionRecord) st
 			WHERE i.slug_index = ?`
 	qb.WriteString(baseQry)
 
-	// Exclude images that have any of the user's permissions
+	// exclude images that have any of the user's permissions
 	if len(userPs) > 0 {
 		qb.WriteString(" AND (p.uuid IS NULL OR p.uuid NOT IN (")
 		for i := 0; i < len(userPs); i++ {

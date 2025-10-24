@@ -162,6 +162,9 @@ func New(config *config.Config) (Gallery, error) {
 
 	tokenProvider := provider.NewS2sTokenProvider(s2s, s2sCreds, repository, cryptor)
 
+	// create reprocess queue
+	reprocessQueue := make(chan pipeline.ReprocessCmd, 100)
+
 	return &gallery{
 		config:           *config,
 		serverTls:        serverTlsConfig,
@@ -174,11 +177,12 @@ func New(config *config.Config) (Gallery, error) {
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
 		patVerifier:      pat.NewVerifier(util.ServiceS2s, s2s, tokenProvider),
-		pictures:         picture.NewService(repository, indexer, cryptor, objStore),
+		pictures:         picture.NewService(repository, indexer, cryptor, objStore, reprocessQueue),
 		patrons:          patron.NewService(repository, indexer, cryptor),
 		permissions:      permission.NewService(repository, indexer, cryptor),
 
-		queue: make(chan storage.WebhookPutObject, 100),
+		uploadQueue:    make(chan storage.WebhookPutObject, 100),
+		reprocessQueue: reprocessQueue,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -206,8 +210,9 @@ type gallery struct {
 	patrons          patron.Service
 	permissions      permission.Service
 
-	queue chan storage.WebhookPutObject
-	wg    sync.WaitGroup
+	uploadQueue    chan storage.WebhookPutObject
+	reprocessQueue chan pipeline.ReprocessCmd
+	wg             sync.WaitGroup
 
 	logger *slog.Logger
 }
@@ -224,10 +229,18 @@ func (g *gallery) CloseDb() error {
 func (g *gallery) Run() error {
 
 	// image processing pipeline queue
-	imgPipeline := pipeline.NewImagePipeline(g.queue, &g.wg, g.repository, g.indexer, g.cryptor, g.objectStorage)
+	imgPipeline := pipeline.NewImagePipeline(
+		g.uploadQueue,
+		g.reprocessQueue,
+		&g.wg,
+		g.repository,
+		g.indexer,
+		g.cryptor,
+		g.objectStorage)
 
-	g.wg.Add(1)
-	go imgPipeline.ProcessQueue()
+	g.wg.Add(2)
+	go imgPipeline.UploadQueue()
+	go imgPipeline.ReprocessQueue()
 
 	// register handlers
 	mux := http.NewServeMux()
@@ -242,7 +255,7 @@ func (g *gallery) Run() error {
 	mux.HandleFunc("/images/", pics.HandleImage) // trailing slash is so slugs can be appended to the path
 
 	// notification handler
-	notify := notification.NewHandler(g.queue, g.s2sVerifier, g.patVerifier)
+	notify := notification.NewHandler(g.uploadQueue, g.s2sVerifier, g.patVerifier)
 	mux.HandleFunc("/images/notify/upload", notify.HandleImageUploadNotification)
 
 	// patron handler
@@ -271,9 +284,10 @@ func (g *gallery) Run() error {
 		}
 	}()
 
-	// wait
+	// close the queues first to handle graceful shutdown.
 	g.wg.Wait()
-	close(g.queue)
+	close(g.uploadQueue)
+	close(g.reprocessQueue)
 
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
 	"github.com/tdeslauriers/pixie/pkg/permission"
+	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // Service is an aggregate interface that combines all picture-related services.
@@ -15,14 +16,21 @@ type Service interface {
 	AlbumImageService
 	ImageService
 	ImageServiceErr
+	StagedImageService
 }
 
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj storage.ObjectStorage) Service {
+func NewService(
+	sql data.SqlRepository, 
+	i data.Indexer, 
+	c data.Cryptor, 
+	obj storage.ObjectStorage, 
+	q chan pipeline.ReprocessCmd) Service {
 	return &service{
-		AlbumService:      NewAlbumService(sql, i, c, obj),
-		AlbumImageService: NewAlbumImageService(sql, i, c),
-		ImageService:      NewImageService(sql, i, c, obj),
-		ImageServiceErr:   NewImageServiceErr(),
+		AlbumService:       NewAlbumService(sql, i, c, obj),
+		AlbumImageService:  NewAlbumImageService(sql, i, c),
+		ImageService:       NewImageService(sql, i, c, obj, q),
+		ImageServiceErr:    NewImageServiceErr(),
+		StagedImageService: NewStagedImageService(sql, i, c, obj),
 	}
 }
 
@@ -34,6 +42,7 @@ type service struct {
 	AlbumImageService
 	ImageService
 	ImageServiceErr
+	StagedImageService
 }
 
 // Handler is an aggregate interface that combines all picture-related handlers.

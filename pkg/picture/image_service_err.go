@@ -48,9 +48,10 @@ func (e *imageServiceErr) HandleImageServiceError(err error, w http.ResponseWrit
 	}
 
 	switch {
-	case strings.Contains(err.Error(), "not have permission"):
-	case strings.Contains(err.Error(), "not have correct permission"):
-	case strings.Contains(err.Error(), "published"):
+	case strings.Contains(err.Error(), "no access") ||
+		strings.Contains(err.Error(), "not have permission") ||
+		strings.Contains(err.Error(), "not have correct permission") ||
+		strings.Contains(err.Error(), "published"):
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusForbidden,
 			Message:    err.Error(),
@@ -58,10 +59,10 @@ func (e *imageServiceErr) HandleImageServiceError(err error, w http.ResponseWrit
 		e.SendJsonErr(w)
 		return
 
-	case strings.Contains(err.Error(), "not found"):
-	case strings.Contains(err.Error(), "does not exist"):
-	case strings.Contains(err.Error(), "no albums found"):
-	case strings.Contains(err.Error(), "no permissions found"):
+	case strings.Contains(err.Error(), "not found") ||
+		strings.Contains(err.Error(), "does not exist") ||
+		strings.Contains(err.Error(), "no albums found") ||
+		strings.Contains(err.Error(), "no permissions found"):
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusNotFound,
 			Message:    err.Error(),
@@ -69,7 +70,7 @@ func (e *imageServiceErr) HandleImageServiceError(err error, w http.ResponseWrit
 		e.SendJsonErr(w)
 		return
 
-	case strings.Contains(err.Error(), "archived"):
+	case strings.Contains(err.Error(), "is archived"):
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusGone,
 			Message:    err.Error(),
@@ -77,12 +78,12 @@ func (e *imageServiceErr) HandleImageServiceError(err error, w http.ResponseWrit
 		e.SendJsonErr(w)
 		return
 
-	case strings.Contains(err.Error(), "not well-formed"):
-	case strings.Contains(err.Error(), "invalid"):
-	case strings.Contains(err.Error(), "not valid"):
-	case strings.Contains(err.Error(), "not a valid"):
-	case strings.Contains(err.Error(), "must be"):
-	case strings.Contains(err.Error(), "required"):
+	case strings.Contains(err.Error(), "not well-formed") ||
+		strings.Contains(err.Error(), "invalid") ||
+		strings.Contains(err.Error(), "not valid") ||
+		strings.Contains(err.Error(), "not a valid") ||
+		strings.Contains(err.Error(), "must be") ||
+		strings.Contains(err.Error(), "required"):
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    err.Error(),

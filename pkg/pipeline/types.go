@@ -26,6 +26,20 @@ const (
 	BlurLongSide int = 32 // long side in pixels for blur/placeholder image
 )
 
+// ReprocessCmd represents a request to re-process an existing picture.
+// For example, an image has its date updated or added if missing which requires
+// it to be moved to a new year-based directory in object storage.
+type ReprocessCmd struct {
+	Id            string
+	FileName      string
+	FileType      string
+	Slug          string
+	CurrentObjKey string
+	UpdatedObjKey string
+	MoveRequired  bool
+	RetryCount    int
+}
+
 // ParseObjectKey is a helper which parses the object key from the webhook
 // to extract the directory, file name, file extension, and slug.
 // Exists to abstract away this logic from the main processing loop.

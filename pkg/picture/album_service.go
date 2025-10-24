@@ -292,16 +292,30 @@ func (s *albumService) GetAlbumBySlug(slug string, psMap map[string]permissions.
 
 	var records []db.AlbumImageRecord
 	if err := s.sql.SelectRecords(qry, &records, args...); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to find images user has permission to view in this album")
-		} else {
-			return nil, fmt.Errorf("failed to retrieve album slug %s from database for user: %v", slug, err)
-		}
+		return nil, fmt.Errorf("failed to retrieve album slug %s from database for user: %v", slug, err)
 	}
 
 	// seocondary check to ensure we have records
 	if len(records) == 0 {
-		return nil, fmt.Errorf("no images found for album slug %s and user's permissions level(s)", slug)
+
+		// check if the album exists at all
+		if exists, err := s.sql.SelectExists(db.BuildAlbumExistsQuery(), slugIndex); err != nil {
+			return nil, fmt.Errorf("failed to check if album %s exists: %v", slug, err)
+		} else if !exists {
+			// album exists, but user has no permissions to view any images in the album
+			return nil, fmt.Errorf("album %s was not found", slug)
+		}
+
+		// check if album exists but is archived
+		if exists, err := s.sql.SelectExists(db.BuildIsArchivedAlbumQuery(), slugIndex); err != nil {
+			return nil, fmt.Errorf("failed to check if album %s has been archived: %v", slug, err)
+		} else if exists {
+			// album is archived
+			return nil, fmt.Errorf("album %s is archived", slug)
+		}
+
+		// this could be permissions, images could be archived, or unpublished.   Could also be no images in album.
+		return nil, fmt.Errorf("user has no access to any images in album %s", slug)
 	}
 
 	// build the album modelfrom the first record
@@ -381,7 +395,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			// possible all fields will be empty if no images are attached to the album
 			// if the id is empty, very likely all fields are empty
 			if img.Id == "" {
-				s.logger.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s", i, r.AlbumTitle))
+				s.logger.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s", i, r.AlbumId))
 				return
 			}
 
@@ -427,12 +441,12 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 
 				url, err := s.store.GetSignedUrl(blurKey)
 				if err != nil {
-					s.logger.Error("failed to get signed URL for blur object key '%s': %v", blurKey, err)
+					s.logger.Error(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", blurKey, err))
 					return
 				}
 
 				if url == nil || url.String() == "" {
-					targetsErrCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
+					targetsErrCh <- fmt.Errorf(fmt.Sprintf("received empty signed URL for blur object key '%s'", blurKey))
 					return
 				}
 

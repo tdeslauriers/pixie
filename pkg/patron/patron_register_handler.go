@@ -58,7 +58,7 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 
 	// check valid s2s
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2sVerifier.BuildAuthorized(readPatronPermissionsAllowed, s2sToken); err != nil {
+	if _, err := h.s2sVerifier.BuildAuthorized(registerPatronAllowed, s2sToken); err != nil {
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}

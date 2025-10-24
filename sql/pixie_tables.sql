@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS album_image (
     album_uuid CHAR(36) NOT NULL,
     image_uuid CHAR(36) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT UTC_TIMESTAMP,
+    UNIQUE KEY uq_album_image_pair (album_uuid, image_uuid),
     CONSTRAINT  fk_album_image_uuid FOREIGN KEY (album_uuid) REFERENCES album(uuid),
     CONSTRAINT fk_image_album_uuid FOREIGN KEY (image_uuid) REFERENCES image(uuid)
 );
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS image_permission (
     image_uuid CHAR(36) NOT NULL,
     permission_uuid CHAR(36) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT UTC_TIMESTAMP,
+    UNIQUE KEY uq_image_permission_pair (image_uuid, permission_uuid),
     CONSTRAINT fk_image_permission_uuid FOREIGN KEY (image_uuid) REFERENCES image(uuid),
     CONSTRAINT fk_permission_image_uuid FOREIGN KEY (permission_uuid) REFERENCES permission(uuid)
 );
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS patron_permission (
     patron_uuid CHAR(36) NOT NULL,
     permission_uuid CHAR(36) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT UTC_TIMESTAMP,
+    UNIQUE KEY uq_patron_permission_pair (patron_uuid, permission_uuid),
     CONSTRAINT fk_patron_permission_patron_uuid FOREIGN KEY (patron_uuid) REFERENCES patron(uuid),
     CONSTRAINT fk_permission_patron_uuid FOREIGN KEY (permission_uuid) REFERENCES permission(uuid)
 );

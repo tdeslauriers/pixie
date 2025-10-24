@@ -40,12 +40,18 @@ type ImageService interface {
 }
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
-func NewImageService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj storage.ObjectStorage) ImageService {
+func NewImageService(
+	sql data.SqlRepository,
+	i data.Indexer, c data.Cryptor,
+	obj storage.ObjectStorage,
+	q chan pipeline.ReprocessCmd,
+) ImageService {
 	return &imageService{
-		sql:     sql,
-		indexer: i,
-		cryptor: crypt.NewCryptor(c),
-		store:   obj,
+		sql:       sql,
+		indexer:   i,
+		cryptor:   crypt.NewCryptor(c),
+		store:     obj,
+		reprocess: q,
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
@@ -57,10 +63,11 @@ func NewImageService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj
 var _ ImageService = (*imageService)(nil)
 
 type imageService struct {
-	sql     data.SqlRepository
-	indexer data.Indexer
-	cryptor crypt.Cryptor // image data specific wrapper around data.Cryptor
-	store   storage.ObjectStorage
+	sql       data.SqlRepository
+	indexer   data.Indexer
+	cryptor   crypt.Cryptor // image data specific wrapper around data.Cryptor
+	store     storage.ObjectStorage
+	reprocess chan pipeline.ReprocessCmd
 
 	logger *slog.Logger
 }
@@ -102,6 +109,14 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 	if err := s.sql.SelectRecord(qry, &record, args...); err != nil {
 		// all of the following presume the user is not a curator/admin.
 		if err == sql.ErrNoRows {
+
+			// check if the image exists at all
+			if exists, err := s.sql.SelectExists(db.BuildImageExistsQry(), index); err != nil {
+				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
+			} else if !exists {
+				return nil, fmt.Errorf("image '%s' was not found", slug)
+			}
+
 			// check if the image exists but the user has not permissions
 			if exists, err := s.sql.SelectExists(db.BuildImagePermissionsQry(userPs), args...); err != nil {
 				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
@@ -119,7 +134,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 			// check if the image is published
 			if exists, err := s.sql.SelectExists(db.BuildImagePublishedQry(), index); err != nil {
 				return nil, fmt.Errorf("failed to check if image is published for slug '%s': %v", slug, err)
-			} else if !exists {
+			} else if exists {
 				return nil, fmt.Errorf("image '%s' is not published", slug)
 			}
 
@@ -176,12 +191,12 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 
 		url, err := s.store.GetSignedUrl(blurKey)
 		if err != nil {
-			errCh <- fmt.Errorf("failed to get signed URL for blur object key '%s': %v", blurKey, err)
+			errCh <- fmt.Errorf(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", blurKey, err))
 			return
 		}
 
 		if url == nil || url.String() == "" {
-			errCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
+			errCh <- fmt.Errorf(fmt.Sprintf("signed URL for blur object key '%s' is empty", blurKey))
 			return
 		}
 
@@ -426,12 +441,26 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 		return fmt.Errorf("failed to update image record id '%s' in database: %v", existing.Id, err)
 	}
 
-	// if the object key has changed, we need to update the object storage service
+	// if the object key has changed, need to update the object storage service
+	// by file naming convention, the only way these would not be equal is if
+	// the dir (possibly 'staged', 'errored', or a different year) in the object key has changed
 	if updated.ObjectKey != existing.ObjectKey {
-		if err := s.store.MoveObject(existing.ObjectKey, updated.ObjectKey); err != nil {
-			return fmt.Errorf("failed to move image from '%s' to '%s' in object storage: %v", existing.ObjectKey, updated.ObjectKey, err)
+
+		// dir -> year or staged/errored, etc.
+		s.logger.Warn(fmt.Sprintf("object key for image slug '%s' year changed from '%s' to '%s', reprossessing...", updated.Slug, existing.ObjectKey, updated.ObjectKey))
+		cmd := pipeline.ReprocessCmd{
+			Id:            existing.Id,
+			FileName:      updated.FileName,
+			FileType:      updated.FileType,
+			Slug:          existing.Slug,
+			CurrentObjKey: existing.ObjectKey,
+			UpdatedObjKey: updated.ObjectKey,
+			MoveRequired:  true,
+			RetryCount:    1, // first attempt
 		}
-		s.logger.Info(fmt.Sprintf("image slug '%s' moved in object storage from '%s' to '%s'", updated.Slug, existing.ObjectKey, updated.ObjectKey))
+
+		// send to reprocessing queue
+		s.reprocess <- cmd
 	}
 
 	return nil
