@@ -208,13 +208,13 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 	}
 
 	// audit log
-	if added != nil && len(added) > 0 {
+	if len(added) > 0 {
 		for _, permission := range added {
 			h.logger.Info(fmt.Sprintf("permission '%s' added to patron '%s' by %s", permission.Name, p.Username, authorized.Claims.Subject))
 		}
 	}
 
-	if removed != nil && len(removed) > 0 {
+	if len(removed) > 0 {
 		for _, permission := range removed {
 			h.logger.Info(fmt.Sprintf("permission '%s' removed from patron '%s' by %s", permission.Name, p.Username, authorized.Claims.Subject))
 		}

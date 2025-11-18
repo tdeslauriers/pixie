@@ -97,7 +97,7 @@ func (s *patronService) GetByUsername(username string) (*Patron, error) {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("patron with username '%s' not found", username)
 		} else {
-			return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", err)
+			return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", username, err)
 		}
 	}
 

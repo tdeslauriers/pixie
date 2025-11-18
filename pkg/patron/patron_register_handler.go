@@ -41,7 +41,7 @@ var _ PatronRegisterHandler = (*patronRegisterHandler)(nil)
 type patronRegisterHandler struct {
 	service     Service
 	s2sVerifier jwt.Verifier
-	iam         jwt.Verifier // inherently nil because this will come from registration -> s2s endpoint
+	// iam         jwt.Verifier // inherently nil because this will come from registration -> s2s endpoint
 
 	logger *slog.Logger
 }
