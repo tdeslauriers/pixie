@@ -1,10 +1,12 @@
 package permission
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -15,7 +17,7 @@ import (
 type PatronPermissionService interface {
 	// GetPatronPermissions returns a map and a list of a patron's permissions.
 	// Key is the permission field, value is the permission record.
-	GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
+	GetPatronPermissions(ctx context.Context, username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
 
 	// AddPermissionToPatron adds a permission to a patron's permissions in the database.
 	AddPermissionToPatron(patronId, permissionId string) error
@@ -33,13 +35,13 @@ func NewPatronPermissionService(sql data.SqlRepository, i data.Indexer, c data.C
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePermissions)).
-			With(slog.String(util.ComponentKey, util.ComponentPermissions)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentPermissions)),
 	}
 }
 
 var _ PatronPermissionService = (*patronPermissionService)(nil)
 
+// patronPermissionService is the concrete implementation of the PatronPermissionService interface.
 type patronPermissionService struct {
 	sql     data.SqlRepository
 	indexer data.Indexer
@@ -50,7 +52,16 @@ type patronPermissionService struct {
 
 // GetPatronPermissions retrieves a patron's permissions from the database.
 // Key is the permission field, value is the permission record.
-func (s *patronPermissionService) GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
+func (s *patronPermissionService) GetPatronPermissions(ctx context.Context, username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
+
+	// create local logger
+	// get telemetry fields from context if exists
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = log.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for GetPatronPermissions")
+	}
 
 	// validate the username
 	// redundant check, but good practice
@@ -83,14 +94,13 @@ func (s *patronPermissionService) GetPatronPermissions(username string) (map[str
 			AND p.active = TRUE`
 	var records []exo.PermissionRecord
 	if err := s.sql.SelectRecords(qry, &records, index); err != nil {
-		s.logger.Error(fmt.Sprintf("failed to retrieve permissions for patron '%s': %v", username, err))
 		return nil, nil, err
 	}
 
 	// It is possible for patrons to have zero permissions.
 	// This will be the default case, so we return an empty map and slice.
 	if len(records) == 0 {
-		s.logger.Warn(fmt.Sprintf("no permissions found for patron '%s'", username))
+		log.Warn(fmt.Sprintf("no permissions found for patron '%s'", username))
 	}
 
 	// decrypt and create a map of permissions

@@ -1,11 +1,11 @@
 package picture
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
@@ -26,9 +26,6 @@ var (
 // Handler is an interface that defines methods for handling album-related requests.
 type AlbumHandler interface {
 
-	// HandleAlbum handles requests related to a specific album.
-	HandleAlbum(w http.ResponseWriter, r *http.Request)
-
 	// HandleAlbums handles requests related to albums.
 	HandleAlbums(w http.ResponseWriter, r *http.Request)
 }
@@ -42,7 +39,6 @@ func NewAlbumHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) Alb
 		iam:   iam,
 
 		logger: slog.Default().
-			With(slog.String(util.ServiceKey, util.ServiceGallery)).
 			With(slog.String(util.ComponentKey, util.ComponentAlbumHandler)).
 			With(slog.String(util.PackageKey, util.PackagePicture)),
 	}
@@ -62,69 +58,41 @@ type albumHandler struct {
 
 // HandleAlbum is the concrete implementation of the interface method which handles album-related requests
 // for a specific album.
-func (h *albumHandler) HandleAlbum(w http.ResponseWriter, r *http.Request) {
-
-	switch r.Method {
-	case http.MethodGet:
-
-		// get the slug to determine if user is going to /albums/staged or /albums/{slug}
-		// get the url slug from the request
-		segments := strings.Split(r.URL.Path, "/")
-
-		var slug string
-		if len(segments) > 1 {
-			slug = segments[len(segments)-1]
-		} else {
-			h.logger.Error("slug is required for GET request to /albums/{slug}")
-			e := connect.ErrorHttp{
-				StatusCode: http.StatusBadRequest,
-				Message:    "slug is required for GET request to /albums/{slug}",
-			}
-			e.SendJsonErr(w)
-			return
-		}
-
-		if slug == "staged" {
-
-			h.handleGetStagedImages(w, r)
-			return
-		} else {
-
-			h.handleGetAlbum(w, r)
-			return
-		}
-
-	case http.MethodPost:
-		h.handleUpdateAlbum(w, r)
-		return
-	// case http.MethodDelete:
-	// 	h.handleDeleteAlbum(w, r)
-	// 	return
-	default:
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusMethodNotAllowed,
-			Message:    "Method not allowed",
-		}
-		e.SendJsonErr(w)
-		return
-	}
-}
-
-// HandleAlbums is the concrete implementation of the interface method which handles album-related requests.
-// It will handle the request logic, including validation and persistence of album records.
 func (h *albumHandler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		h.handleGetAlbums(w, r)
-		return
+
+		// get slug from path if exists
+		slug := r.PathValue("slug")
+		switch slug {
+		case "":
+			h.handleGetAlbums(w, r)
+			return
+		case "staged":
+			h.handleGetStagedImages(w, r)
+			return
+		default:
+			h.handleGetAlbum(w, r)
+			return
+		}
 	case http.MethodPost:
 		h.handleCreateAlbum(w, r)
 		return
+	case http.MethodPut:
+		h.handleUpdateAlbum(w, r)
+		return
+
 	default:
+		// Handle unsupported methods
+		// get telemetry from request
+		tel := connect.ObtainTelemetry(r, h.logger)
+		log := h.logger.With(tel.TelemetryFields()...)
+
+		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusMethodNotAllowed,
-			Message:    "Method not allowed",
+			Message:    fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path),
 		}
 		e.SendJsonErr(w)
 		return
@@ -134,25 +102,36 @@ func (h *albumHandler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 // handleActiveAlbums handles the retrieval of all album records a user has permission to view.
 func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken); err != nil {
+	authedSvc, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
-	authorized, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
+	authedUser, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
 	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
 
 	// get the user's permissions
-	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	ps, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve permissions for user '%s': %v", authorized.Claims.Subject, err))
+		log.Error("failed to retrieve permissions for user", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to retrieve permissions",
@@ -161,9 +140,9 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, albums, err := h.svc.GetAllowedAlbumsData(ps)
+	_, albums, err := h.svc.GetAllowedAlbumsData(ctx, ps)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve albums for user '%s': %v", authorized.Claims.Subject, err))
+		log.Error("failed to retrieve albums", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to retrieve albums",
@@ -172,14 +151,16 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Info(fmt.Sprintf("successfully retrieved %d albums", len(albums)))
+
 	// send the response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(albums); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to encode albums for user '%s': %v", authorized.Claims.Subject, err))
+		log.Error("failed to encode albums to json", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to encode albums",
+			Message:    "failed to encode albums to json",
 		}
 		e.SendJsonErr(w)
 		return
@@ -189,17 +170,28 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 // handleGetAlbum handles the retrieval of a specific album record.
 func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken); err != nil {
+	authedSvc, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
-	authorized, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
+	authedUser, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
 	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
@@ -207,19 +199,19 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 	// extract the slug from the request URL
 	slug, err := connect.GetValidSlug(r)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to extract album slug from request url: %v", err))
+		log.Error("failed to extract album slug from request url", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    "failed to extract album slug from request url",
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// get the user's permissions
-	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	ps, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve permissions for user '%s': %v", authorized.Claims.Subject, err))
+		log.Error("failed to retrieve permissions for user", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to retrieve permissions",
@@ -229,20 +221,22 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// retrieve the album record
-	album, err := h.svc.GetAlbumBySlug(slug, ps)
+	album, err := h.svc.GetAlbumBySlug(ctx, slug, ps)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve album '%s' for user '%s': %v", slug, authorized.Claims.Subject, err))
-		h.svc.HandleImageServiceError(err, w)
+		log.Error(fmt.Sprintf("failed to retrieve album '%s' for user", slug), "err", err.Error())
+		h.svc.HandleImageServiceError(ctx, err, w)
 		return
 	}
+
+	log.Info(fmt.Sprintf("successfully retrieved album '%s'", album.Title))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(album); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to encode album '%s': %v", album.Title, err))
+		log.Error("failed to encode album to json", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to encode album",
+			Message:    "failed to encode album to json",
 		}
 		e.SendJsonErr(w)
 		return
@@ -254,33 +248,44 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 // There is not database record for staged, it is simply a collection of images that have not been assigned to an album.
 func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
+	// Note: this endpoint is read only, so only read permissions are required
 	// validate service token
-	// this endpoint is read-only, so only read scope is required
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken); err != nil {
+	authedSvc, err := h.s2s.BuildAuthorized(readAlbumAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate iam token
-	// this endpoint is read-only, so only read scope is required
-	// However, the user also needs the curator permission to view staged images
 	iamToken := r.Header.Get("Authorization")
-	authorized, err := h.iam.BuildAuthorized(append(readAlbumAllowed, "r:pixie:curator"), iamToken)
+	authedUser, err := h.iam.BuildAuthorized(readAlbumAllowed, iamToken)
 	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	// this is admin endpoint, so add actor to logger
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// do not need to extract slug since it is always "staged"
 
 	// get the user's permissions
-	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	ps, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve gallery permissions for user '%s': %v", authorized.Claims.Subject, err))
+		log.Error("failed to retrieve permissions for user", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to retrieve gallery permissions",
+			Message:    "failed to retrieve user's gallery permissions",
 		}
 		e.SendJsonErr(w)
 		return
@@ -288,7 +293,7 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 
 	// validate the user has the curator permission
 	if _, ok := ps["CURATOR"]; !ok {
-		h.logger.Error(fmt.Sprintf("User '%s' does not have the curator permission to view staged images", authorized.Claims.Subject))
+		log.Error("user does not have permission to view staged images")
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusForbidden,
 			Message:    "You do not have permission to view staged images",
@@ -297,17 +302,17 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	album, err := h.svc.GetStagedImages()
+	album, err := h.svc.GetStagedImages(ctx)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve staged images for user '%s': %v", authorized.Claims.Subject, err))
-		h.svc.HandleImageServiceError(err, w)
+		log.Error("failed to retrieve staged images album", "err", err.Error())
+		h.svc.HandleImageServiceError(ctx, err, w)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(album); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to encode staged images album: %v", err))
+		log.Error("failed to encode staged images album to json", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to encode staged images album",
@@ -320,28 +325,40 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 // handleUpdateAlbum handles the update of an existing album record.
 func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2s.BuildAuthorized(editAlbumAllowed, s2sToken); err != nil {
+	authedSvc, err := h.s2s.BuildAuthorized(editAlbumAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
-	authorized, err := h.iam.BuildAuthorized(editAlbumAllowed, iamToken)
+	authedUser, err := h.iam.BuildAuthorized(editAlbumAllowed, iamToken)
 	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// extract the slug from the request URL
 	slug, err := connect.GetValidSlug(r)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to extract album slug from request url: %v", err))
+		log.Error("failed to extract album slug from request url", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    "failed to extract album slug from request url",
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
@@ -350,10 +367,10 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 	// decode the request body into an cmd record
 	var cmd api.AlbumUpdateCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-		h.logger.Error("failed to decode album record", slog.Any("error", err))
+		log.Error("failed to decode update album command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    "failed to decode album record",
+			Message:    "failed to decode update album command",
 		}
 		e.SendJsonErr(w)
 		return
@@ -361,19 +378,19 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 
 	// validate the album record
 	if err := cmd.Validate(); err != nil {
-		h.logger.Error("Album record validation failed", slog.Any("error", err))
+		log.Error("failed to validate update album command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
-			Message:    "Album record validation failed",
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// get the user's permissions
-	ps, _, err := h.perms.GetPatronPermissions(authorized.Claims.Subject)
+	ps, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve permissions for user '%s': %v", authorized.Claims.Subject, err))
+		log.Error(fmt.Sprintf("failed to retrieve permissions for user '%s': %v", authedUser.Claims.Subject, err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to retrieve permissions",
@@ -383,9 +400,9 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 	}
 
 	// lookup the existing album record to ensure it exists
-	existing, err := h.svc.GetAlbumBySlug(slug, ps)
+	existing, err := h.svc.GetAlbumBySlug(ctx, slug, ps)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve existing album '%s' for user '%s': %v", slug, authorized.Claims.Subject, err))
+		log.Error("failed to retrieve existing album", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to retrieve existing album",
@@ -407,26 +424,41 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 
 	// update the album record in the database
 	if err := h.svc.UpdateAlbum(updated); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to update album record '%s': %v", slug, err))
+		log.Error("failed to update album record", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to update album record",
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// audit log
+	var changes []any
+
 	if updated.Title != existing.Title {
-		h.logger.Info(fmt.Sprintf("album record title '%s' updated to '%s' by user '%s'", existing.Title, updated.Title, authorized.Claims.Subject))
+		changes = append(changes,
+			slog.String("previous_title", existing.Title),
+			slog.String("updated_title", updated.Title))
 	}
 
 	if updated.Description != existing.Description {
-		h.logger.Info(fmt.Sprintf("album record description '%s' updated to '%s' by user '%s'", existing.Description, updated.Description, authorized.Claims.Subject))
+		changes = append(changes,
+			slog.String("previous_description", existing.Description),
+			slog.String("updated_description", updated.Description))
 	}
 
 	if updated.IsArchived != existing.IsArchived {
-		h.logger.Info(fmt.Sprintf("album record is_archived status changed to '%t' by user '%s'", updated.IsArchived, authorized.Claims.Subject))
+		changes = append(changes,
+			slog.Bool("previous_is_archived", existing.IsArchived),
+			slog.Bool("updated_is_archived", updated.IsArchived))
+	}
+
+	if len(changes) > 0 {
+		log = log.With(changes...)
+		log.Info(fmt.Sprintf("successfully updated album slug %s", slug))
+	} else {
+		log.Warn(fmt.Sprintf("update command executed, but no changes were made to album slug %s", slug))
 	}
 
 	// respond 204 No Content
@@ -436,28 +468,37 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 // handleCreateAlbum handles the creation of a new album record.
 func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2s.BuildAuthorized(editAlbumAllowed, s2sToken); err != nil {
+	authedSvc, err := h.s2s.BuildAuthorized(editAlbumAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
-	authorized, err := h.iam.BuildAuthorized(editAlbumAllowed, iamToken)
+	authedUser, err := h.iam.BuildAuthorized(editAlbumAllowed, iamToken)
 	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// decode the request body into an cmd record
 	var cmd api.AddAlbumCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-		h.logger.Error("failed to decode album record", slog.Any("error", err))
+		log.Error("failed to decode create album command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    "failed to decode album record",
+			Message:    "failed to decode create album command",
 		}
 		e.SendJsonErr(w)
 		return
@@ -465,10 +506,10 @@ func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request)
 
 	// validate the album record
 	if err := cmd.Validate(); err != nil {
-		h.logger.Error("Album record validation failed", slog.Any("error", err))
+		log.Error("failed to validate create album command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
-			Message:    "Album record validation failed",
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
@@ -478,7 +519,7 @@ func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request)
 	// which will populate the missing fields
 	created, err := h.svc.CreateAlbum(cmd)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to create album record: %v", err))
+		log.Error("failed to create album record", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "failed to create album record",
@@ -488,7 +529,7 @@ func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request)
 	}
 
 	// audit log
-	h.logger.Info(fmt.Sprintf("album record '%s' created by user '%s'", created.Title, authorized.Claims.Subject))
+	log.Info(fmt.Sprintf("successfully created album '%s' with slug '%s'", created.Title, created.Slug))
 
 	// build the response
 	response := api.Album{
@@ -506,10 +547,10 @@ func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to encode created album record: %v", err))
+		log.Error("failed to encode created album record to json", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to encode created album record",
+			Message:    "failed to encode created album record to json",
 		}
 		e.SendJsonErr(w)
 		return

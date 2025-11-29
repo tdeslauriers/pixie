@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/util"
@@ -29,7 +31,7 @@ type StagedImageService interface {
 
 	// GetStagedImages retrieves the staged images album.
 	// Note: it assumes the calling function has already verified the requester's permissions.
-	GetStagedImages() (*api.Album, error)
+	GetStagedImages(ctx context.Context) (*api.Album, error)
 }
 
 // NewStagedImageService creates a new StagedImageService.
@@ -62,7 +64,16 @@ type stagedImageService struct {
 // GetStagedImages is the concrete implementation of the StagedImagesService interface method which
 // retrieves the staged images album.
 // Note: it assumes the calling function has already verified the requester's permissions.
-func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
+func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, error) {
+
+	// create function scoped logger
+	// add telemetry fields from context if exists
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = log.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for GetStagedImages")
+	}
 
 	// create aritficial "staged" album
 	// the rest of the album fields are intentionally omitted
@@ -95,9 +106,7 @@ func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
 		WHERE i.is_published = FALSE`
 	var images []db.ImageRecord
 	if err := s.sql.SelectRecords(qry, &images); err != nil {
-		errMsg := fmt.Sprintf("failed to retrieve unpublished images from database when retrieving staged images: %v", err)
-		s.logger.Error(errMsg)
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("failed to retrieve unpublished images from database when retrieving staged images: %v", err)
 	}
 
 	if len(images) == 0 {
@@ -117,9 +126,7 @@ func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
 			defer decryptWg.Done()
 
 			if err := s.cryptor.DecryptImageRecord(&img); err != nil {
-				errMsg := fmt.Sprintf("failed to decrypt metadata for staged image %s: %v", img.Id, err)
-				s.logger.Error(errMsg)
-				decryptErrCh <- fmt.Errorf(errMsg)
+				decryptErrCh <- fmt.Errorf("failed to decrypt metadata for staged image %s: %v", img.Id, err)
 				return
 			}
 
@@ -156,16 +163,13 @@ func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
 			// get the "directory" part of the object key
 			dir, _, ext, _, err := pipeline.ParseObjectKey(img.ObjectKey)
 			if err != nil {
-				errMsg := fmt.Sprintf("failed to parse object key '%s' for unpublished image %s when retrieving staged images: %v", img.ObjectKey, img.Id, err)
-				s.logger.Error(errMsg)
-				stagedErrCh <- fmt.Errorf(errMsg)
+				stagedErrCh <- fmt.Errorf("failed to parse object key '%s' for unpublished image %s: %v",
+					img.ObjectKey, img.Id, err)
 				return
 			}
 
 			if dir == "" {
-				errMsg := fmt.Sprintf("invalid object key '%s' for unpublished image %s when retrieving staged images", img.ObjectKey, img.Id)
-				s.logger.Error(errMsg)
-				stagedErrCh <- fmt.Errorf(errMsg)
+				stagedErrCh <- fmt.Errorf("invalid object key '%s' for unpublished image %s", img.ObjectKey, img.Id)
 				return
 			}
 
@@ -173,7 +177,7 @@ func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
 			dir = strings.Replace(dir, "/", "", -1)
 			if dir != "staging" {
 				// not in staging directory, unpublished for some other reason
-				s.logger.Info(fmt.Sprintf("skipping unpublished image %s: not in staging directory", img.Id))
+				log.Warn(fmt.Sprintf("skipping unpublished image %s: not in staging directory", img.Id))
 				return
 			}
 
@@ -221,12 +225,12 @@ func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
 
 				url, err := s.objStore.GetSignedUrl(key)
 				if err != nil {
-					s.logger.Warn(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", key, err))
+					log.Warn(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", key, err))
 					return
 				}
 
 				if url == nil || url.String() == "" {
-					s.logger.Warn(fmt.Sprintf("signed URL for blur object key '%s' is empty", key))
+					log.Warn(fmt.Sprintf("signed URL for blur object key '%s' is empty", key))
 					return
 				}
 				ch <- url.String()
@@ -261,7 +265,7 @@ func (s *stagedImageService) GetStagedImages() (*api.Album, error) {
 		for err := range stagedErrCh {
 			errs = append(errs, err)
 		}
-		return nil, fmt.Errorf("one or more errors occurred while retrieving staged images: %v", errors.Join(errs...))
+		return nil, fmt.Errorf("error(s) occurred while retrieving staged images: %v", errors.Join(errs...))
 	}
 
 	// collect the staged images

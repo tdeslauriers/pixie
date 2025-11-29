@@ -1,6 +1,7 @@
 package notification
 
 import (
+	"context"
 	"encoding/json"
 
 	"fmt"
@@ -34,7 +35,6 @@ func NewHandler(ch chan storage.WebhookPutObject, s2s jwt.Verifier, pat pat.Veri
 		queue: ch,
 
 		logger: slog.Default().
-			With(slog.String(util.ServiceKey, util.ServiceGallery)).
 			With(slog.String(util.PackageKey, util.PackageNotification)).
 			With(slog.String(util.ComponentKey, util.ComponentNotificationHandler)),
 	}
@@ -55,23 +55,32 @@ type handler struct {
 // handles notifications of image uploads from object storage via the gateway service.
 func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// validate method
 	if r.Method != http.MethodPost {
+		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusMethodNotAllowed,
-			Message:    "method not allowed",
+			Message:    fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path),
 		}
 		e.SendJsonErr(w)
-		return
 	}
 
 	// validate s2s token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2s.BuildAuthorized(requiredScopes, s2sToken); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to validate s2s token in image upload notification: %v", err.Error()))
+	authedSvc, err := h.s2s.BuildAuthorized(requiredScopes, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// pat validation call to s2s service
 	pat := r.Header.Get("Authorization")
@@ -82,9 +91,9 @@ func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.R
 	}
 
 	// validate the PAT
-	_, err := h.pat.BuildAuthorized(requiredScopes, pat)
+	authedPat, err := h.pat.BuildAuthorized(ctx, requiredScopes, pat)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to validate PAT in image upload notification request: %s", err.Error()))
+		log.Error("failed to validate PAT", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnauthorized,
 			Message:    "failed to validate PAT",
@@ -92,14 +101,15 @@ func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.R
 		e.SendJsonErr(w)
 		return
 	}
+	log = log.With("actor", authedPat.ServiceName)
 
 	// decode the request body
 	var webhook storage.WebhookPutObject
 	if err := json.NewDecoder(r.Body).Decode(&webhook); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to decode JSON in image upload notification request body: %s", err.Error()))
+		log.Error("failed to decode webhook payload", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    "improperly formatted json in webhook request body",
+			Message:    "failed to decode webhook payload",
 		}
 		e.SendJsonErr(w)
 		return
@@ -107,7 +117,7 @@ func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.R
 
 	// validate the webhook payload
 	if err := webhook.Validate(); err != nil {
-		h.logger.Error(fmt.Sprintf("invalid webhook payload in image upload notification request body: %s", err.Error()))
+		log.Error("failed to validate webhook payload", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    err.Error(),
@@ -116,7 +126,7 @@ func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	h.logger.Info(fmt.Sprintf("received image upload notification for object %s in bucket %s", webhook.MinioKey, webhook.Records[0].S3.Bucket.Name))
+	log.Info(fmt.Sprintf("received image upload notification for object %s in bucket %s", webhook.MinioKey, webhook.Records[0].S3.Bucket.Name))
 
 	// send webhook to processing queue
 	h.queue <- webhook

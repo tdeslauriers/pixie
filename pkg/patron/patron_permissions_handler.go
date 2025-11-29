@@ -1,6 +1,7 @@
 package patron
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -35,8 +36,7 @@ func NewPermissionHandler(s Service, s2s, iam jwt.Verifier) PermissionHandler {
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePatron)).
-			With(slog.String(util.ComponentKey, util.ComponentPatron)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentPatron)),
 	}
 }
 
@@ -64,10 +64,14 @@ func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Req
 		h.updatePatronPermissions(w, r)
 		return
 	default:
-		h.logger.Error(fmt.Sprintf("unsupported method %s for patrons permissions handler", r.Method))
+		// get telemetry from request
+		tel := connect.ObtainTelemetry(r, h.logger)
+		log := h.logger.With(tel.TelemetryFields()...)
+
+		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusMethodNotAllowed,
-			Message:    fmt.Sprintf("unsupported method %s for patrons permissions handler", r.Method),
+			Message:    fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path),
 		}
 		e.SendJsonErr(w)
 		return
@@ -77,25 +81,36 @@ func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Req
 // getPatronPermissions retrieves a patron's permissions from the database.
 func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// validate the s2s token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2sVerifier.BuildAuthorized(readPatronPermissionsAllowed, s2sToken); err != nil {
-		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify service token: %v", err))
+	authedSvc, err := h.s2sVerifier.BuildAuthorized(readPatronPermissionsAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate the iam token
 	iamToken := r.Header.Get("Authorization")
-	if _, err := h.iamVerifier.BuildAuthorized(readPatronPermissionsAllowed, iamToken); err != nil {
-		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify iam token: %v", err))
+	authedUser, err := h.iamVerifier.BuildAuthorized(readPatronPermissionsAllowed, iamToken)
+	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	username := r.URL.Query().Get("username")
 	if username == "" {
-		h.logger.Error("username query parameter is required")
+		log.Error("username missing from query params", "err", "username query parameter is required")
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
 			Message:    "username query parameter is required",
@@ -106,22 +121,22 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 
 	// validate the username
 	if err := validate.IsValidEmail(username); err != nil {
-		h.logger.Error(fmt.Sprintf("invalid username '%s': %v", username, err))
+		log.Error("failed to validate username", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    fmt.Sprintf("invalid username '%s': %v", username, err),
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// get the patron's permissions
-	_, ps, err := h.service.GetPatronPermissions(username)
+	_, ps, err := h.service.GetPatronPermissions(ctx, username)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve permissions for patron '%s': %v", username, err))
+		log.Error("failed to retrieve permissions for patron", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    fmt.Sprintf("failed to retrieve permissions for patron '%s': %v", username, err),
+			Message:    "failed to retrieve permissions for patron",
 		}
 		e.SendJsonErr(w)
 		return
@@ -130,10 +145,10 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 	// respond with the permissions
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(ps); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to encode permissions for patron '%s': %v", username, err))
+		log.Error("failed to encode permissions for patron to json", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    fmt.Sprintf("failed to encode permissions for patron '%s': %v", username, err),
+			Message:    "failed to encode permissions for patron to json",
 		}
 		e.SendJsonErr(w)
 		return
@@ -143,30 +158,40 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 // update PatronPermissions updates a patron's permissions via xref in the database.
 func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// validate the s2s token
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2sVerifier.BuildAuthorized(updatePatronPermissionsAllowed, s2sToken); err != nil {
-		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify service token: %v", err))
+	authedSvc, err := h.s2sVerifier.BuildAuthorized(updatePatronPermissionsAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// validate the iam token
 	iamToken := r.Header.Get("Authorization")
-	authorized, err := h.iamVerifier.BuildAuthorized(updatePatronPermissionsAllowed, iamToken)
+	authedUser, err := h.iamVerifier.BuildAuthorized(updatePatronPermissionsAllowed, iamToken)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("patron permissions endpoint failed to verify iam token: %v", err))
+		log.Error("failed to validate iam token", "err", err.Error())
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// get the request body
 	var cmd permissions.UpdatePermissionsCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to decode request body: %v", err))
+		log.Error("failed to decode request body", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    err.Error(),
+			Message:    "failed to decode request body",
 		}
 		e.SendJsonErr(w)
 		return
@@ -174,7 +199,7 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 
 	// validate the request
 	if err := cmd.Validate(); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to validate request: %v", err))
+		log.Error("failed to validate update permissions command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    err.Error(),
@@ -184,39 +209,43 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 	}
 
 	// look up the patron by email
-	p, err := h.service.GetByUsername(cmd.Entity) // entity will be username in this case
+	p, err := h.service.GetByUsername(ctx, cmd.Entity) // entity will be username in this case
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to retrieve patron by email '%s': %v", cmd.Entity, err))
+		log.Error(fmt.Sprintf("failed to retrieve patron by email '%s'", cmd.Entity), "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusNotFound,
-			Message:    fmt.Sprintf("failed to retrieve patron by email '%s': %v", cmd.Entity, err),
+			Message:    fmt.Sprintf("failed to retrieve patron by email '%s'", cmd.Entity),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// update the patron's permissions
-	added, removed, err := h.service.UpdatePatronPermissions(p, cmd.Permissions)
+	added, removed, err := h.service.UpdatePatronPermissions(ctx, p, cmd.Permissions)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to update permissions for patron '%s': %v", p.Username, err))
+		log.Error(fmt.Sprintf("failed to update permissions for patron '%s'", p.Username), "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    fmt.Sprintf("failed to update permissions for patron '%s': %v", p.Username, err),
+			Message:    fmt.Sprintf("failed to update permissions for patron '%s'", p.Username),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// audit log
+	if len(added) <= 0 && len(removed) <= 0 {
+		log.Warn(fmt.Sprintf("update command fired successfully, but no permission changes for patron '%s'", p.Username))
+	}
+
 	if len(added) > 0 {
 		for _, permission := range added {
-			h.logger.Info(fmt.Sprintf("permission '%s' added to patron '%s' by %s", permission.Name, p.Username, authorized.Claims.Subject))
+			log.Info(fmt.Sprintf("permission '%s' added to patron '%s'", permission.Name, p.Username))
 		}
 	}
 
 	if len(removed) > 0 {
 		for _, permission := range removed {
-			h.logger.Info(fmt.Sprintf("permission '%s' removed from patron '%s' by %s", permission.Name, p.Username, authorized.Claims.Subject))
+			log.Info(fmt.Sprintf("permission '%s' removed from patron '%s'", permission.Name, p.Username))
 		}
 	}
 

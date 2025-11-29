@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
@@ -30,7 +32,7 @@ type ImageService interface {
 	GetImageData(slug string, userPs map[string]permissions.PermissionRecord) (*api.ImageData, error)
 
 	// UpdateImageData updates an existing image record in the database.
-	UpdateImageData(existing *api.ImageData, updated *db.ImageRecord) error
+	UpdateImageData(ctx context.Context, existing *api.ImageData, updated *db.ImageRecord) error
 
 	// BuildPlaceholder builds the metadata for a placeholder image record.
 	// eg, the id, slug, title, and description provided by the user.
@@ -46,6 +48,7 @@ func NewImageService(
 	obj storage.ObjectStorage,
 	q chan pipeline.ReprocessCmd,
 ) ImageService {
+
 	return &imageService{
 		sql:       sql,
 		indexer:   i,
@@ -55,13 +58,13 @@ func NewImageService(
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
-			With(slog.String(util.ComponentKey, util.ComponentImage)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentImage)),
 	}
 }
 
 var _ ImageService = (*imageService)(nil)
 
+// imageService is the concrete implementation of the ImageService interface.
 type imageService struct {
 	sql       data.SqlRepository
 	indexer   data.Indexer
@@ -191,12 +194,12 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 
 		url, err := s.store.GetSignedUrl(blurKey)
 		if err != nil {
-			errCh <- fmt.Errorf(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", blurKey, err))
+			errCh <- fmt.Errorf("failed to get signed URL for blur object key '%s': %v", blurKey, err)
 			return
 		}
 
 		if url == nil || url.String() == "" {
-			errCh <- fmt.Errorf(fmt.Sprintf("signed URL for blur object key '%s' is empty", blurKey))
+			errCh <- fmt.Errorf("signed URL for blur object key '%s' is empty", blurKey)
 			return
 		}
 
@@ -381,7 +384,16 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholde
 // updates an existing image record in the database.
 // NOTE: the only reason existing is passed is so that we check if the ojbectstore needs to be updated
 // due to a new ojbect key being generated.
-func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.ImageRecord) error {
+func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageData, updated *db.ImageRecord) error {
+
+	// create function scoped logger
+	// add telemetry fields from context if exists
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = log.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for buildImageData")
+	}
 
 	// validate updated image record
 	// redundant check, but good practice
@@ -390,14 +402,15 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 	}
 
 	// is update necessary?
+	// redundant check, but good practice
 	if existing.Title == updated.Title &&
 		existing.Description == updated.Description &&
 		existing.ImageDate == updated.ImageDate &&
 		existing.ObjectKey == updated.ObjectKey &&
 		existing.IsArchived == updated.IsArchived &&
 		existing.IsPublished == updated.IsPublished {
-		s.logger.Warn(fmt.Sprintf("no changes detected for image slug '%s', skipping update", existing.Slug))
-		return nil // no changes, nothing to update
+		log.Warn(fmt.Sprintf("no changes detected for image slug '%s', skipping update", existing.Slug))
+		return nil
 	}
 
 	// get the blind index for the slug
@@ -413,7 +426,7 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 
 	// encrypt the sensitive fields in the updated image record
 	if err := s.cryptor.EncryptImageRecord(&encrypted); err != nil {
-		return fmt.Errorf("failed to encrypt updated image data for slug '%s': %v", updated.Slug, err)
+		return fmt.Errorf("failed to encrypt updated image slug '%s' data: %v", updated.Slug, err)
 	}
 
 	// update the image record in the database
@@ -447,7 +460,9 @@ func (s *imageService) UpdateImageData(existing *api.ImageData, updated *db.Imag
 	if updated.ObjectKey != existing.ObjectKey {
 
 		// dir -> year or staged/errored, etc.
-		s.logger.Warn(fmt.Sprintf("object key for image slug '%s' year changed from '%s' to '%s', reprossessing...", updated.Slug, existing.ObjectKey, updated.ObjectKey))
+		log.Warn(fmt.Sprintf("image slug %s's object key changed from '%s' to '%s', reprossessing...",
+			updated.Slug, existing.ObjectKey, updated.ObjectKey))
+
 		cmd := pipeline.ReprocessCmd{
 			Id:            existing.Id,
 			FileName:      updated.FileName,

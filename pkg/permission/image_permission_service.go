@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -26,7 +28,7 @@ type ImagePermissionService interface {
 	// It adds new permissions and removes old ones as necessary.
 	// It takes the image ID and a slice of permission slugs to be associated with the image.
 	// Returns an error if any.
-	UpdateImagePermissions(imageId string, permissionSlugs []string) error
+	UpdateImagePermissions(ctx context.Context, imageId string, permissionSlugs []string) error
 }
 
 // NewImagePermissionService creates a new ImagePermissionService instance, returning a pointer to the concrete implementation.
@@ -38,8 +40,7 @@ func NewImagePermissionService(sql data.SqlRepository, i data.Indexer, c data.Cr
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePermissions)).
-			With(slog.String(util.ComponentKey, util.ComponentImagePermissions)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentImagePermissions)),
 	}
 }
 
@@ -59,6 +60,7 @@ type imagePermissionService struct {
 // Returns a map and slice of PermissionRecords, or an error if any.
 // Key is the permission field, value is the PermissionRecord.
 func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
+
 	// validate the image id
 	if !validate.IsValidUuid(imageId) {
 		return nil, nil, fmt.Errorf("image Id must be a valid UUID")
@@ -82,14 +84,11 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 			AND p.active = TRUE`
 	var records []exo.PermissionRecord
 	if err := s.sql.SelectRecords(qry, &records, imageId); err != nil {
-		s.logger.Error(fmt.Sprintf("failed to retrieve permissions for image '%s': %v", imageId, err))
 		return nil, nil, err
 	}
 
 	if len(records) == 0 {
-		noneMsg := fmt.Sprintf("no permissions found for image '%s'", imageId)
-		s.logger.Info(noneMsg)
-		return nil, nil, fmt.Errorf(noneMsg)
+		return nil, nil, fmt.Errorf("no permissions found for image '%s'", imageId)
 	}
 
 	// decrypt and create a map of permissions
@@ -141,7 +140,14 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 // It adds new permissions and removes old ones as necessary.
 // It takes the image ID and a slice of permission slugs to be associated with the image.
 // Returns an error if any.
-func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissionSlugs []string) error {
+func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, imageId string, permissionSlugs []string) error {
+
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = s.logger.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for UpdateImagePermissions")
+	}
 
 	// validate the image id
 	if !validate.IsValidUuid(imageId) {
@@ -221,9 +227,12 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 	// get the current permissions associated with the image
 	currentPsMap, _, err := s.GetImagePermissions(imageId)
 	if err != nil {
+
 		if strings.Contains(err.Error(), "no permissions found for image") {
-			s.logger.Warn(fmt.Sprintf("image '%s' currently has no permissions associated", imageId))
+
+			log.Warn(fmt.Sprintf("image '%s' currently has no permissions associated", imageId))
 		} else {
+
 			return fmt.Errorf("failed to get current permissions for image '%s': %v", imageId, err)
 		}
 	}
@@ -251,7 +260,7 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 	}
 
 	if len(toAdd) > 0 || len(toRemove) > 0 {
-		s.logger.Info(fmt.Sprintf("updating permissions for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
+		log.Info(fmt.Sprintf("updating permissions for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
 		// perform the additions and removals in parallel
 		var (
 			xrefWg    sync.WaitGroup
@@ -283,7 +292,7 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 					return
 				}
 
-				s.logger.Info(fmt.Sprintf("added permission '%s' to image '%s'", permissionId, imageId))
+				log.Info(fmt.Sprintf("added permission '%s' to image '%s'", permissionId, imageId))
 			}(p.Id)
 		}
 
@@ -300,7 +309,7 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 					return
 				}
 
-				s.logger.Info(fmt.Sprintf("removed permission '%s' from image '%s'", permissionId, imageId))
+				log.Info(fmt.Sprintf("removed permission '%s' from image '%s'", permissionId, imageId))
 			}(p.Id)
 		}
 
@@ -319,7 +328,7 @@ func (s *imagePermissionService) UpdateImagePermissions(imageId string, permissi
 		}
 
 	} else {
-		s.logger.Info(fmt.Sprintf("no changes to permissions for image '%s'", imageId))
+		log.Info(fmt.Sprintf("no changes to permissions for image '%s'", imageId))
 	}
 
 	return nil

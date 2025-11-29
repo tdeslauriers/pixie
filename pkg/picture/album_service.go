@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
@@ -32,12 +34,12 @@ type AlbumService interface {
 	// GetAllowedAlbumsData returns a map ([id]album) and a list of albums that the user is allowed to
 	// view based on their permissions.
 	// Note, these records include a single image record for the album cover.
-	GetAllowedAlbumsData(psMap map[string]permissions.PermissionRecord) (map[string]api.Album, []api.Album, error)
+	GetAllowedAlbumsData(ctx context.Context, psMap map[string]permissions.PermissionRecord) (map[string]api.Album, []api.Album, error)
 
 	// GetAlbum returns a specific album record by its slug, and
 	// a slice of the thumbnail images for the album.
 	// Note: username is required to check permissions for each of the album's associated images.
-	GetAlbumBySlug(slug string, psMap map[string]permissions.PermissionRecord) (*api.Album, error)
+	GetAlbumBySlug(ctx context.Context, slug string, psMap map[string]permissions.PermissionRecord) (*api.Album, error)
 
 	// CreateAlbum creates a new album record in the database, ecrypots sensitive fields, and
 	// returns a pointer to the created album record,
@@ -60,7 +62,6 @@ func NewAlbumService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, o s
 		store:   o,
 
 		logger: slog.Default().
-			With(slog.String(util.ServiceKey, util.ServiceGallery)).
 			With(slog.String(util.ComponentKey, util.ComponentAlbumSerivce)).
 			With(slog.String(util.PackageKey, util.PackagePicture)),
 	}
@@ -154,7 +155,10 @@ func (s *albumService) GetAllowedAlbums(psMap map[string]permissions.PermissionR
 }
 
 // GetAllowedAlbumsData implements the Service interface method to retrieve all album-image records a user has permission to view.
-func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.PermissionRecord) (map[string]api.Album, []api.Album, error) {
+func (s *albumService) GetAllowedAlbumsData(
+	ctx context.Context,
+	psMap map[string]permissions.PermissionRecord,
+) (map[string]api.Album, []api.Album, error) {
 
 	// build album query based on permissions
 	qry, err := db.BuildAllAlbumsImagesQuery(psMap)
@@ -225,7 +229,7 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 			// // check if image fields are present
 			// for CURATOR, may have albums with no images
 			if r.ImageId != "" {
-				image, err := s.buildImageData([]db.AlbumImageRecord{r})
+				image, err := s.buildImageData(ctx, []db.AlbumImageRecord{r})
 				if err != nil {
 					errCh <- fmt.Errorf("failed to build image data for album '%s': %v", album.Id, err)
 					return
@@ -259,7 +263,11 @@ func (s *albumService) GetAllowedAlbumsData(psMap map[string]permissions.Permiss
 
 // GetAlbumBySlug implements the Service interface method to retrieve a specific album record by its slug.
 // It also retrieves a slice of the thumbnail images for the album.
-func (s *albumService) GetAlbumBySlug(slug string, psMap map[string]permissions.PermissionRecord) (*api.Album, error) {
+func (s *albumService) GetAlbumBySlug(
+	ctx context.Context,
+	slug string,
+	psMap map[string]permissions.PermissionRecord,
+) (*api.Album, error) {
 
 	// vadidate the slug is well formed
 	// redundant check, but good practice
@@ -338,7 +346,7 @@ func (s *albumService) GetAlbumBySlug(slug string, psMap map[string]permissions.
 	// build the images slice from the records
 	// includes decryption of sensitive fields and
 	// getting presigned links to the image thumbnails
-	images, err := s.buildImageData(records)
+	images, err := s.buildImageData(ctx, records)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build image data for album slug %s: %v", slug, err)
 	}
@@ -351,7 +359,16 @@ func (s *albumService) GetAlbumBySlug(slug string, psMap map[string]permissions.
 
 // buildImageData takes the fields from a AlbumImageRecords and builds an slice of decrypted ImageData structs
 // with presigned URLs for the thumbnail images.
-func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.ImageData, error) {
+func (s *albumService) buildImageData(ctx context.Context, records []db.AlbumImageRecord) ([]api.ImageData, error) {
+
+	// create function scoped logger
+	// add telemetry fields from context if exists
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = log.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for buildImageData")
+	}
 
 	// chack that records slice is not empty
 	if len(records) == 0 {
@@ -395,7 +412,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			// possible all fields will be empty if no images are attached to the album
 			// if the id is empty, very likely all fields are empty
 			if img.Id == "" {
-				s.logger.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s", i, r.AlbumId))
+				log.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s", i, r.AlbumId))
 				return
 			}
 
@@ -441,12 +458,12 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 
 				url, err := s.store.GetSignedUrl(blurKey)
 				if err != nil {
-					s.logger.Error(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", blurKey, err))
+					log.Error(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", blurKey, err))
 					return
 				}
 
 				if url == nil || url.String() == "" {
-					targetsErrCh <- fmt.Errorf(fmt.Sprintf("received empty signed URL for blur object key '%s'", blurKey))
+					targetsErrCh <- fmt.Errorf("received empty signed URL for blur object key '%s'", blurKey)
 					return
 				}
 
@@ -467,7 +484,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 				for e := range targetsErrCh {
 					errMsgs = append(errMsgs, e.Error())
 				}
-				s.logger.Error(fmt.Sprintf("one or more errors occurred while getting signed URLs for image '%s': %s", img.Id, strings.Join(errMsgs, "; ")))
+				log.Error(fmt.Sprintf("error(s) occurred getting signed URLs for image '%s': %s", img.Slug, strings.Join(errMsgs, "; ")))
 				return
 			}
 
@@ -483,7 +500,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			if len(targets) > 0 {
 				img.ImageTargets = targets
 			} else {
-				s.logger.Error(fmt.Sprintf("no image signed url targets found for image '%s'", img.Id))
+				log.Error(fmt.Sprintf("no image signed url targets found for image slug '%s'", img.Slug))
 			}
 
 			// set the blur URL on the image data
@@ -492,7 +509,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			if len(blurCh) > 0 {
 				img.BlurUrl = <-blurCh
 			} else {
-				s.logger.Error(fmt.Sprintf("no blur signed url found for image '%s'", img.Id))
+				log.Error(fmt.Sprintf("no blur signed url found for image '%s'", img.Slug))
 			}
 
 			// set the image data in the slice
@@ -513,7 +530,7 @@ func (s *albumService) buildImageData(records []db.AlbumImageRecord) ([]api.Imag
 			errs = append(errs, e)
 		}
 		if len(errs) > 0 {
-			return nil, fmt.Errorf("failed to build image data for album: %v", errors.Join(errs...))
+			return nil, fmt.Errorf("failed to build image data:: %v", errors.Join(errs...))
 		}
 	}
 
@@ -585,9 +602,6 @@ func (s *albumService) CreateAlbum(cmd api.AddAlbumCmd) (*db.AlbumRecord, error)
 		return nil, fmt.Errorf("failed to insert album record into database: %v", err)
 	}
 
-	// log the creation
-	s.logger.Info(fmt.Sprintf("created album record '%s'", album.Title))
-
 	// set the plaintext title and description back on the album record
 	// so that it can be returned to the caller in readable format
 	album.Title = cmd.Title
@@ -637,9 +651,6 @@ func (s *albumService) UpdateAlbum(updated db.AlbumRecord) error {
 	); err != nil {
 		return fmt.Errorf("failed to update album record '%s': %v", updated.Id, err)
 	}
-
-	// log the update
-	s.logger.Info(fmt.Sprintf("updated album record '%s'", updated.Id))
 
 	return nil
 }

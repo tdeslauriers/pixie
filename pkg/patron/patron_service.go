@@ -1,6 +1,7 @@
 package patron
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -21,20 +23,20 @@ type PatronService interface {
 
 	// GetByUsername retrieves a patron record by username from the database and
 	// performs necessary decryption.
-	GetByUsername(username string) (*Patron, error)
+	GetByUsername(ctx context.Context, username string) (*Patron, error)
 
 	// CreatePatron creates a new patron record in the database.
-	CreatePatron(string) (*Patron, error)
+	CreatePatron(username string) (*Patron, error)
 
 	// GetPatronPermissions retrieves a patron's permissions from the database.
 	// NOTE: at this time, this is a wrapper around the permissions service's function with the same name.
 	// It is included here for consistency with the interface.
-	GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
+	GetPatronPermissions(ctx context.Context, username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error)
 
 	// UpdatePatronPermissions updates a patron's permissions in the database and returns
 	// a map of permissions that were added and removed.
 	// slugs are the permission slugs to update for the patron.
-	UpdatePatronPermissions(p *Patron, slugs []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error)
+	UpdatePatronPermissions(ctx context.Context, p *Patron, slugs []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error)
 }
 
 // NewService creates a new Patron service instance, returning a pointer to the concrete implementation.
@@ -47,8 +49,7 @@ func NewPatronService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Pa
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePatron)).
-			With(slog.String(util.ComponentKey, util.ComponentPatron)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentPatron)),
 	}
 }
 
@@ -65,7 +66,7 @@ type patronService struct {
 
 // GetByUsername is the concrete implementation of the interface method which
 // retrieves a patron record by username from the database and performs necessary decryption.
-func (s *patronService) GetByUsername(username string) (*Patron, error) {
+func (s *patronService) GetByUsername(ctx context.Context, username string) (*Patron, error) {
 
 	// validate the username
 	if err := validate.IsValidEmail(username); err != nil {
@@ -107,7 +108,7 @@ func (s *patronService) GetByUsername(username string) (*Patron, error) {
 	}
 
 	// get the patron's permissions
-	_, ps, err := s.permissions.GetPatronPermissions(username)
+	_, ps, err := s.permissions.GetPatronPermissions(ctx, username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve permissions for patron '%s': %v", username, err)
 	}
@@ -265,8 +266,6 @@ func (s *patronService) CreatePatron(username string) (*Patron, error) {
 		return nil, fmt.Errorf("failed to insert patron record into database: %v", err)
 	}
 
-	s.logger.Info(fmt.Sprintf("created patron '%s' in the database", record.Id))
-
 	// return the patron record
 	return &Patron{
 		Id:         record.Id,
@@ -283,14 +282,23 @@ func (s *patronService) CreatePatron(username string) (*Patron, error) {
 // retrieves a patron's permissions from the database.
 // NOTE: at this time, this is a wrapper around the permissions service's function with the same name.
 // It is included here for consistency with the interface.
-func (s *patronService) GetPatronPermissions(username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
+func (s *patronService) GetPatronPermissions(ctx context.Context, username string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
 
-	return s.permissions.GetPatronPermissions(username)
+	return s.permissions.GetPatronPermissions(ctx, username)
 }
 
 // UpdatePatronPermissions is the concrete implementation of the interface method which
 // updates a patron's permissions in the database.
-func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error) {
+func (s *patronService) UpdatePatronPermissions(ctx context.Context, pat *Patron, slugs []string) (map[string]exo.PermissionRecord, map[string]exo.PermissionRecord, error) {
+
+	// create local logger
+	// add telemetry from context if exists
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = s.logger.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for UpdatePatronPermissions")
+	}
 
 	if pat == nil {
 		return nil, nil, fmt.Errorf("patron record is nil")
@@ -367,7 +375,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 					return
 				}
 
-				s.logger.Info(fmt.Sprintf("permission '%s' added to patron '%s'", permission.Name, pat.Username))
+				log.Info(fmt.Sprintf("permission '%s' added to patron '%s'", permission.Name, pat.Username))
 			}(pm, errCh, &wg)
 		}
 	}
@@ -384,7 +392,7 @@ func (s *patronService) UpdatePatronPermissions(pat *Patron, slugs []string) (ma
 					return
 				}
 
-				s.logger.Info(fmt.Sprintf("permission '%s' removed from patron '%s'", permission.Name, pat.Username))
+				log.Info(fmt.Sprintf("permission '%s' removed from patron '%s'", permission.Name, pat.Username))
 			}(pm, errCh, &wg)
 		}
 	}

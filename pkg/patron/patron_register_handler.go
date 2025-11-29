@@ -1,6 +1,7 @@
 package patron
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -29,7 +30,6 @@ func NewPatronRegisterHandler(s Service, s2s jwt.Verifier) PatronRegisterHandler
 		s2sVerifier: s2s,
 
 		logger: slog.Default().
-			With(slog.String(util.ServiceKey, util.ServiceGallery)).
 			With(slog.String(util.PackageKey, util.PackagePatron)).
 			With(slog.String(util.ComponentKey, util.ComponentPatronRegister)),
 	}
@@ -50,26 +50,40 @@ type patronRegisterHandler struct {
 // It will handle the registration logic, including validation and persistence of the patron record.
 func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
+	// get telemetry from request
+	tel := connect.ObtainTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
+
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+
 	// check the request is a POST request
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusMethodNotAllowed,
+			Message:    fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path),
+		}
+		e.SendJsonErr(w)
 	}
 
 	// check valid s2s
 	s2sToken := r.Header.Get("Service-Authorization")
-	if _, err := h.s2sVerifier.BuildAuthorized(registerPatronAllowed, s2sToken); err != nil {
+	authedSvc, err := h.s2sVerifier.BuildAuthorized(registerPatronAllowed, s2sToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
+	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// get the patron registration command from the request body
 	var cmd PatronRegisterCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to decode patron registration command: %v", err))
+		log.Error("failed to decode patron registration command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,
-			Message:    fmt.Sprintf("failed to decode patron registration command: %v", err),
+			Message:    "failed to decode patron registration command",
 		}
 		e.SendJsonErr(w)
 		return
@@ -77,25 +91,25 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 
 	// validate the command
 	if err := cmd.Validate(); err != nil {
-		h.logger.Error(fmt.Sprintf("patron registration command validation failed: %v", err))
+		log.Error("failed to validate patron registration command", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
-			Message:    fmt.Sprintf("patron registration command validation failed: %v", err),
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
 	// check if the patron already exists
-	existing, err := h.service.GetByUsername(strings.TrimSpace(cmd.Username))
+	existing, err := h.service.GetByUsername(ctx, strings.TrimSpace(cmd.Username))
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			h.logger.Info(fmt.Sprintf("patron with username '%s' does not exist, proceeding with registration", cmd.Username))
+			log.Info(fmt.Sprintf("patron with username '%s' does not exist, proceeding with registration", cmd.Username))
 		} else {
-			h.logger.Error(fmt.Sprintf("failed to check if patron already exists: %v", err))
+			log.Error("failed to check if patron already exists", "err", err.Error())
 			e := connect.ErrorHttp{
 				StatusCode: http.StatusInternalServerError,
-				Message:    fmt.Sprintf("failed to check if patron already exists: %v", err),
+				Message:    "failed to check if patron already exists",
 			}
 			e.SendJsonErr(w)
 			return
@@ -103,7 +117,8 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 	}
 
 	if existing != nil {
-		h.logger.Error(fmt.Sprintf("patron with username '%s' already exists", cmd.Username))
+		h.logger.Error("failed to register patron",
+			"err", fmt.Sprintf("patron with username '%s' already exists", cmd.Username))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusConflict,
 			Message:    fmt.Sprintf("patron with username '%s' already exists", cmd.Username),
@@ -115,22 +130,22 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 	// create the patron record in the database
 	p, err := h.service.CreatePatron(cmd.Username)
 	if err != nil {
-		h.logger.Error(fmt.Sprintf("failed to create patron: %v", err))
+		log.Error("failed to create patron", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
-			Message:    fmt.Sprintf("failed to create patron: %v", err),
+			Message:    err.Error(),
 		}
 		e.SendJsonErr(w)
 		return
 	}
 
-	h.logger.Info(fmt.Sprintf("patron '%s' registered successfully", cmd.Username))
+	log.Info(fmt.Sprintf("patron '%s' registered successfully", cmd.Username))
 
 	// respond with the created patron record
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(p); err != nil {
-		h.logger.Error(fmt.Sprintf("failed to encode patron record: %v", err))
+		log.Error(fmt.Sprintf("failed to encode patron record: %v", err))
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    fmt.Sprintf("failed to encode patron record: %v", err),

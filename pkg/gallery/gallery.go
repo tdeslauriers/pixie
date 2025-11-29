@@ -205,7 +205,7 @@ type gallery struct {
 	s2sVerifier      jwt.Verifier
 	iamVerifier      jwt.Verifier
 	patVerifier      pat.Verifier
-	identity         connect.S2sCaller
+	identity         *connect.S2sCaller
 	pictures         picture.Service
 	patrons          patron.Service
 	permissions      permission.Service
@@ -248,11 +248,10 @@ func (g *gallery) Run() error {
 
 	// album handlers
 	pics := picture.NewHandler(g.pictures, g.permissions, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/albums", pics.HandleAlbums) // handles album listing and creation
-	mux.HandleFunc("/albums/", pics.HandleAlbum) // trailing slash is so slugs can be appended to the path
+	mux.HandleFunc("/albums/{slug...}", pics.HandleAlbums) 
 
 	// image handlers
-	mux.HandleFunc("/images/", pics.HandleImage) // trailing slash is so slugs can be appended to the path
+	mux.HandleFunc("/images/{slug...}", pics.HandleImage)
 
 	// notification handler
 	notify := notification.NewHandler(g.uploadQueue, g.s2sVerifier, g.patVerifier)
@@ -267,8 +266,7 @@ func (g *gallery) Run() error {
 
 	// permissions handler
 	perm := permission.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/permissions", perm.HandlePermissions)
-	mux.HandleFunc("/permissions/", perm.HandlePermission) // trailing slash is so slugs can be appended to the path
+	mux.HandleFunc("/permissions/{slug...}", perm.HandlePermissions)
 
 	galleryServer := &connect.TlsServer{
 		Addr:      g.config.ServicePort,

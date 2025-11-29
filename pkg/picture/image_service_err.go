@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,7 +14,7 @@ import (
 type ImageServiceErr interface {
 
 	// HandleImageServiceError handles errors that occur in the image service.
-	HandleImageServiceError(err error, w http.ResponseWriter)
+	HandleImageServiceError(ctx context.Context, err error, w http.ResponseWriter)
 }
 
 // NewImageServiceErr creates a new ImageServiceErr instance.
@@ -21,8 +22,7 @@ func NewImageServiceErr() ImageServiceErr {
 	return &imageServiceErr{
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
-			With(slog.String(util.ComponentKey, util.ComponentImageServiceErr)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentImageServiceErr)),
 	}
 }
 
@@ -33,12 +33,21 @@ type imageServiceErr struct {
 }
 
 // HandleImageServiceError handles errors that occur in the image service.
-func (e *imageServiceErr) HandleImageServiceError(err error, w http.ResponseWriter) {
+func (ise *imageServiceErr) HandleImageServiceError(ctx context.Context, err error, w http.ResponseWriter) {
+
+	// create function scoped logger
+	// add telemetry fields from context if exists
+	log := ise.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = log.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for HandleImageServiceError")
+	}
 
 	// for safety, handle param err == nil
 	// this should never happen, but if it does, log it and return 500
 	if err == nil {
-		e.logger.Error("HandleImageServiceError was invoked, but submitted error was nil")
+		log.Error("HandleImageServiceError was invoked, but submitted error was nil")
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusInternalServerError,
 			Message:    "Internal Server Error",

@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/util"
@@ -30,7 +32,7 @@ type AlbumImageService interface {
 	// UpdateAlbumImages updates the albums associated with an image.
 	// It adds new associations and removes old ones.
 	// Returns an error if any operation fails.
-	UpdateAlbumImages(imageId string, albumSlugs []string) error
+	UpdateAlbumImages(ctx context.Context, imageId string, albumSlugs []string) error
 }
 
 // NewAlbumImageService creates a new AlbumImageService instace and returns a pointer to the concrete implementation.
@@ -42,8 +44,7 @@ func NewAlbumImageService(sql data.SqlRepository, i data.Indexer, c data.Cryptor
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
-			With(slog.String(util.ComponentKey, util.ComponentAlbumImageService)).
-			With(slog.String(util.ServiceKey, util.ServiceGallery)),
+			With(slog.String(util.ComponentKey, util.ComponentAlbumImageService)),
 	}
 }
 
@@ -86,17 +87,12 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumR
 		WHERE ai.image_uuid = ?`
 	var albums []db.AlbumRecord
 	if err := s.sql.SelectRecords(qry, &albums, imageId); err != nil {
-		s.logger.Error(fmt.Sprintf("failed to retrieve albums for image '%s': %v", imageId, err))
 		return nil, nil, fmt.Errorf("failed to retrieve albums for image '%s': %v", imageId, err)
 	}
 
 	if len(albums) == 0 {
-		noneMsg := fmt.Sprintf("no albums found for image '%s'", imageId)
-		s.logger.Info(noneMsg)
 		return nil, nil, fmt.Errorf("no albums found for image '%s'", imageId)
 	}
-
-	s.logger.Info(fmt.Sprintf("retrieved %d albums for image '%s'", len(albums), imageId))
 
 	// decrypt the album records
 	var (
@@ -134,9 +130,6 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumR
 			return nil, nil, fmt.Errorf("failed to decrypt album records: %v", errors.Join(errs...))
 		}
 	}
-
-	// return the decrypted albums
-	s.logger.Info(fmt.Sprintf("successfully decrypted %d albums for image '%s'", len(albums), imageId))
 
 	return albumsMap, albums, nil
 }
@@ -180,7 +173,16 @@ func (s *albumImageService) InsertImagePermissionXref(imageId, permissionId stri
 // UpdateAlbumImages updates the albums associated with an image.
 // It adds new associations and removes old ones.
 // Returns an error if any operation fails.
-func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []string) error {
+func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId string, albumSlugs []string) error {
+
+	// create function scoped logger
+	// add telemetry fields from context if exists
+	log := s.logger
+	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+		log = log.With(tel.TelemetryFields()...)
+	} else {
+		log.Warn("no telemetry found in context for UpdateAlbumImages")
+	}
 
 	// validate the image id
 	if !validate.IsValidUuid(imageId) {
@@ -204,7 +206,7 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 	qry := `SELECT uuid, title, description, slug, slug_index, created_at, updated_at, is_archived FROM album`
 	var allAlbums []db.AlbumRecord
 	if err := s.sql.SelectRecords(qry, &allAlbums); err != nil {
-		s.logger.Error(fmt.Sprintf("failed to retrieve all albums for validation: %v", err))
+		return fmt.Errorf("failed to retrieve all albums for validation: %v", err)
 	}
 
 	// decrypt and build a map of all albums
@@ -259,7 +261,7 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 	currentAlbumsMap, _, err := s.GetImageAlbums(imageId)
 	if err != nil {
 		if strings.Contains(err.Error(), "no albums found for image") {
-			s.logger.Warn(fmt.Sprintf("image '%s' currently has no albums associated", imageId))
+			log.Warn(fmt.Sprintf("image '%s' currently has no albums associated", imageId))
 		} else {
 			return fmt.Errorf("failed to get current albums for image '%s': %v", imageId, err)
 		}
@@ -284,7 +286,7 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 	}
 
 	if len(toAdd) > 0 || len(toRemove) > 0 {
-		s.logger.Info(fmt.Sprintf("updating albums for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
+		log.Info(fmt.Sprintf("updating albums for image '%s': %d to add, %d to remove", imageId, len(toAdd), len(toRemove)))
 
 		// perform the additions and removals in parallel
 		var (
@@ -313,7 +315,7 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 					xrefErrCh <- fmt.Errorf("failed to add album '%s' to image '%s': %v", albumId, imageId, err)
 					return
 				}
-				s.logger.Info(fmt.Sprintf("added album '%s' to image '%s'", albumId, imageId))
+				log.Info(fmt.Sprintf("added album '%s' to image '%s'", albumId, imageId))
 			}(a.Id)
 		}
 
@@ -326,7 +328,7 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 					xrefErrCh <- fmt.Errorf("failed to remove album '%s' from image '%s': %v", albumId, imageId, err)
 					return
 				}
-				s.logger.Info(fmt.Sprintf("removed album '%s' from image '%s'", albumId, imageId))
+				log.Info(fmt.Sprintf("removed album '%s' from image '%s'", albumId, imageId))
 			}(a.Id)
 		}
 
@@ -344,9 +346,9 @@ func (s *albumImageService) UpdateAlbumImages(imageId string, albumSlugs []strin
 			}
 		}
 
-		s.logger.Info(fmt.Sprintf("successfully updated albums for image '%s'", imageId))
+		log.Info(fmt.Sprintf("successfully updated albums for image '%s'", imageId))
 	} else {
-		s.logger.Info(fmt.Sprintf("no album changes detected for image '%s', nothing to update", imageId))
+		log.Info(fmt.Sprintf("no album changes detected for image '%s', nothing to update", imageId))
 	}
 
 	return nil

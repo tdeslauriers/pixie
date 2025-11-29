@@ -16,11 +16,11 @@ func main() {
 	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})
-	slog.SetDefault(slog.New(jsonHandler))
+	slog.SetDefault(slog.New(jsonHandler).
+		With(slog.String(util.ServiceKey, util.ServiceGallery)))
 
 	// create a logger for the main package
 	logger := slog.Default().
-		With(slog.String(util.ServiceKey, util.ServiceGallery)).
 		With(slog.String(util.PackageKey, util.PackageMain)).
 		With(slog.String(util.ComponentKey, util.ComponentMain))
 
@@ -41,20 +41,20 @@ func main() {
 
 	config, err := config.Load(def)
 	if err != nil {
-		logger.Error(fmt.Sprintf("failed to load %s gallery service config: %v", util.ServiceGallery, err))
+		logger.Error(fmt.Sprintf("failed to load %s gallery service config", util.ServiceGallery), "err", err.Error())
 		os.Exit(1)
 	}
 
 	gallery, err := gallery.New(config)
 	if err != nil {
-		logger.Error(fmt.Sprintf("failed to create %s gallery service: %v", util.ServiceGallery, err))
+		logger.Error(fmt.Sprintf("failed to create %s gallery service", util.ServiceGallery), "	err", err.Error())
 		os.Exit(1)
 	}
 
 	defer gallery.CloseDb()
 
 	if err := gallery.Run(); err != nil {
-		logger.Error(fmt.Sprintf("failed to run %s gallery service: %v", util.ServiceGallery, err))
+		logger.Error(fmt.Sprintf("failed to run %s gallery service", util.ServiceGallery), "err", err.Error())
 		os.Exit(1)
 	}
 
