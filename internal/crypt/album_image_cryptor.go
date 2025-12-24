@@ -8,14 +8,14 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
 // AlbumImageCryptor is an interface which defines methods for encrypting and decrypting
 type AlbumImageCryptor interface {
 
-	// DecryptAlbumImages decrypts sensitive fields in an AlbumImageRecord model.
-	DecryptAlbumImage(r *db.AlbumImageRecord) error
+	// DecryptAlbumImages decrypts sensitive fields in an api.AlbumImageRecord model.
+	DecryptAlbumImage(r *api.AlbumImageRecord) error
 }
 
 // NewAlbumImageCryptor creates a new AlbumImageCryptor instance, returning a pointer to the concrete implementation.
@@ -44,7 +44,7 @@ type albumImageCryptor struct {
 // DecryptAlbumImage is a wrapper function around the generalized
 // field decryption function, decryptAlbumFields,
 // that decrypts the sensitive fields in the album image record struct.
-func (aic *albumImageCryptor) DecryptAlbumImage(r *db.AlbumImageRecord) error {
+func (aic *albumImageCryptor) DecryptAlbumImage(r *api.AlbumImageRecord) error {
 	if r == nil {
 		return errors.New("album image record cannot be nil")
 	}

@@ -1,4 +1,4 @@
-package picture
+package album
 
 import (
 	"context"
@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
+	"github.com/tdeslauriers/pixie/internal/permission"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
-	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 // scopes required to interact with the album handler(s) endpoints
@@ -24,19 +24,28 @@ var (
 )
 
 // Handler is an interface that defines methods for handling album-related requests.
-type AlbumHandler interface {
+type Handler interface {
 
 	// HandleAlbums handles requests related to albums.
 	HandleAlbums(w http.ResponseWriter, r *http.Request)
 }
 
 // NewHandler creates a new Handler instance and returns a pointer to the concrete implementation.
-func NewAlbumHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) AlbumHandler {
+func NewHandler(
+	s Service,
+	stg StagedImageService,
+	p permission.Service,
+	s2s jwt.Verifier,
+	iam jwt.Verifier,
+
+) Handler {
+
 	return &albumHandler{
-		svc:   s,
-		perms: p,
-		s2s:   s2s,
-		iam:   iam,
+		svc:    s,
+		staged: stg,
+		perms:  p,
+		s2s:    s2s,
+		iam:    iam,
 
 		logger: slog.Default().
 			With(slog.String(util.ComponentKey, util.ComponentAlbumHandler)).
@@ -44,14 +53,15 @@ func NewAlbumHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) Alb
 	}
 }
 
-var _ AlbumHandler = (*albumHandler)(nil)
+var _ Handler = (*albumHandler)(nil)
 
 // handler is the concrete implementation of the Handler interface.
 type albumHandler struct {
-	svc   Service
-	perms permission.Service
-	s2s   jwt.Verifier
-	iam   jwt.Verifier // inherently nil because this will come from registration -> s2s
+	svc    Service
+	staged StagedImageService
+	perms  permission.Service
+	s2s    jwt.Verifier
+	iam    jwt.Verifier // inherently nil because this will come from registration -> s2s
 
 	logger *slog.Logger
 }
@@ -224,8 +234,37 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 	album, err := h.svc.GetAlbumBySlug(ctx, slug, ps)
 	if err != nil {
 		log.Error(fmt.Sprintf("failed to retrieve album '%s' for user", slug), "err", err.Error())
-		h.svc.HandleImageServiceError(ctx, err, w)
-		return
+		switch {
+		case strings.Contains(err.Error(), "no access"),
+			strings.Contains(err.Error(), "archived"):
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusForbidden,
+				Message:    err.Error(),
+			}
+			e.SendJsonErr(w)
+			return
+		case strings.Contains(err.Error(), "not found"):
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusNotFound,
+				Message:    err.Error(),
+			}
+			e.SendJsonErr(w)
+			return
+		case strings.Contains(err.Error(), "invalid"):
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusUnprocessableEntity,
+				Message:    err.Error(),
+			}
+			e.SendJsonErr(w)
+			return
+		default:
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusInternalServerError,
+				Message:    "failed to retrieve album",
+			}
+			e.SendJsonErr(w)
+			return
+		}
 	}
 
 	log.Info(fmt.Sprintf("successfully retrieved album '%s'", album.Title))
@@ -302,11 +341,25 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	album, err := h.svc.GetStagedImages(ctx)
+	album, err := h.staged.GetStagedImages(ctx)
 	if err != nil {
 		log.Error("failed to retrieve staged images album", "err", err.Error())
-		h.svc.HandleImageServiceError(ctx, err, w)
-		return
+		switch {
+		case strings.Contains(err.Error(), "invalid"):
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusUnprocessableEntity,
+				Message:    err.Error(),
+			}
+			e.SendJsonErr(w)
+			return
+		default:
+			e := connect.ErrorHttp{
+				StatusCode: http.StatusInternalServerError,
+				Message:    "failed to retrieve staged images album",
+			}
+			e.SendJsonErr(w)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -413,7 +466,7 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 
 	// build the updated album record
 	// only certain fields can be updated; other fields are immutable and will be ignored
-	updated := db.AlbumRecord{
+	updated := api.AlbumRecord{
 		Id:          existing.Id, // immutable
 		Title:       cmd.Title,
 		Description: cmd.Description,

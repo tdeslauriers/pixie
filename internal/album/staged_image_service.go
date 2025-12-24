@@ -1,4 +1,4 @@
-package picture
+package album
 
 import (
 	"context"
@@ -12,11 +12,10 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
+	"github.com/tdeslauriers/pixie/internal/crypt"
+	"github.com/tdeslauriers/pixie/internal/pipeline"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
-	"github.com/tdeslauriers/pixie/pkg/crypt"
-	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // Staged album data.
@@ -104,7 +103,7 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 		FROM
 			image i
 		WHERE i.is_published = FALSE`
-	var images []db.ImageRecord
+	var images []api.ImageRecord
 	if err := s.sql.SelectRecords(qry, &images); err != nil {
 		return nil, fmt.Errorf("failed to retrieve unpublished images from database when retrieving staged images: %v", err)
 	}
@@ -122,7 +121,7 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 
 	for i, img := range images {
 		decryptWg.Add(1)
-		go func(i int, img db.ImageRecord) {
+		go func(i int, img api.ImageRecord) {
 			defer decryptWg.Done()
 
 			if err := s.cryptor.DecryptImageRecord(&img); err != nil {
@@ -157,7 +156,7 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 	for _, img := range images {
 
 		stagedImgWg.Add(1)
-		go func(ir db.ImageRecord, imgCh chan<- api.ImageData, errCh chan<- error, wg *sync.WaitGroup) {
+		go func(ir api.ImageRecord, imgCh chan<- api.ImageData, errCh chan<- error, wg *sync.WaitGroup) {
 			defer wg.Done()
 
 			// get the "directory" part of the object key

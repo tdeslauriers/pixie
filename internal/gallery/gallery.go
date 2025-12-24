@@ -19,12 +19,13 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/session/provider"
 	"github.com/tdeslauriers/carapace/pkg/sign"
 	"github.com/tdeslauriers/carapace/pkg/storage"
+	"github.com/tdeslauriers/pixie/internal/album"
+	"github.com/tdeslauriers/pixie/internal/notification"
+	"github.com/tdeslauriers/pixie/internal/patron"
+	"github.com/tdeslauriers/pixie/internal/permission"
+	"github.com/tdeslauriers/pixie/internal/picture"
+	"github.com/tdeslauriers/pixie/internal/pipeline"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/notification"
-	"github.com/tdeslauriers/pixie/pkg/patron"
-	"github.com/tdeslauriers/pixie/pkg/permission"
-	"github.com/tdeslauriers/pixie/pkg/picture"
-	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // Gallery is the interface for engine that runs this service
@@ -178,6 +179,8 @@ func New(config *config.Config) (Gallery, error) {
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
 		patVerifier:      pat.NewVerifier(util.ServiceS2s, s2s, tokenProvider),
 		pictures:         picture.NewService(repository, indexer, cryptor, objStore, reprocessQueue),
+		albums:           album.NewService(repository, indexer, cryptor, objStore),
+		staged:           album.NewStagedImageService(repository, indexer, cryptor, objStore),
 		patrons:          patron.NewService(repository, indexer, cryptor),
 		permissions:      permission.NewService(repository, indexer, cryptor),
 
@@ -207,6 +210,8 @@ type gallery struct {
 	patVerifier      pat.Verifier
 	identity         *connect.S2sCaller
 	pictures         picture.Service
+	albums           album.Service
+	staged           album.StagedImageService
 	patrons          patron.Service
 	permissions      permission.Service
 
@@ -247,25 +252,50 @@ func (g *gallery) Run() error {
 	mux.HandleFunc("/health", diagnostics.HealthCheckHandler)
 
 	// album handlers
-	pics := picture.NewHandler(g.pictures, g.permissions, g.s2sVerifier, g.iamVerifier)
-	mux.HandleFunc("/albums/{slug...}", pics.HandleAlbums) 
+	albs := album.NewHandler(
+		g.albums,
+		g.staged,
+		g.permissions,
+		g.s2sVerifier,
+		g.iamVerifier,
+	)
+	mux.HandleFunc("/albums/{slug...}", albs.HandleAlbums)
 
 	// image handlers
+	pics := picture.NewHandler(
+		g.pictures,
+		g.albums,
+		g.permissions,
+		g.s2sVerifier,
+		g.iamVerifier,
+	)
 	mux.HandleFunc("/images/{slug...}", pics.HandleImage)
 
 	// notification handler
-	notify := notification.NewHandler(g.uploadQueue, g.s2sVerifier, g.patVerifier)
+	notify := notification.NewHandler(
+		g.uploadQueue,
+		g.s2sVerifier,
+		g.patVerifier,
+	)
 	mux.HandleFunc("/images/notify/upload", notify.HandleImageUploadNotification)
 
 	// patron handler
-	pat := patron.NewHandler(g.patrons, g.s2sVerifier, g.iamVerifier)
+	pat := patron.NewHandler(
+		g.patrons,
+		g.s2sVerifier,
+		g.iamVerifier,
+	)
 	mux.HandleFunc("/patrons/permissions", pat.HandlePermissions) // retrieves users permissions and handles updates to patron permissions
 
 	// s2s patron registration -> happens at time of registration, there will be no iam token
 	mux.HandleFunc("/s2s/patrons/register", pat.HandleRegister) // handles patron registration -> ghost profile creation
 
 	// permissions handler
-	perm := permission.NewHandler(g.permissions, g.s2sVerifier, g.iamVerifier)
+	perm := permission.NewHandler(
+		g.permissions,
+		g.s2sVerifier,
+		g.iamVerifier,
+	)
 	mux.HandleFunc("/permissions/{slug...}", perm.HandlePermissions)
 
 	galleryServer := &connect.TlsServer{

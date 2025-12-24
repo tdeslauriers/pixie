@@ -28,9 +28,9 @@ type Handler interface {
 // NewHandler creates a new permissions handler and provides a pointer to a concrete implementation.
 func NewHandler(s exo.Service, s2s, iam jwt.Verifier) Handler {
 	return &permissionsHandler{
-		// service: s,
-		s2s: s2s,
-		iam: iam,
+		service: s,
+		s2s:     s2s,
+		iam:     iam,
 
 		logger: slog.Default().
 			With(slog.String(util.ComponentKey, util.ComponentPermissions)).

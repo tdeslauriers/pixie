@@ -11,6 +11,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/util"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
 var (
@@ -78,7 +79,7 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 	log = log.With("requesting_service", authedSvc.Claims.Subject)
 
 	// get the patron registration command from the request body
-	var cmd PatronRegisterCmd
+	var cmd api.PatronRegisterCmd
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
 		log.Error("failed to decode patron registration command", "err", err.Error())
 		e := connect.ErrorHttp{

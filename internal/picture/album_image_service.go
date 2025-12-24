@@ -12,9 +12,10 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/validate"
+	"github.com/tdeslauriers/pixie/internal/crypt"
+	"github.com/tdeslauriers/pixie/internal/permission"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
-	"github.com/tdeslauriers/pixie/pkg/crypt"
+	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
 // AlbumImageService is an interface that defines the methods for album_image xref management.
@@ -24,7 +25,7 @@ type AlbumImageService interface {
 	// GetImageAlbums retrieves the albums associated with an image.
 	// Returns a map of album slugs to AlbumRecord and a slice of AlbumRecord, ir
 	// an error if any.
-	GetImageAlbums(imageId string) (map[string]db.AlbumRecord, []db.AlbumRecord, error)
+	GetImageAlbums(imageId string) (map[string]api.AlbumRecord, []api.AlbumRecord, error)
 
 	// InsertImagePermissionXref inserts a new image_permission xref record into the database.
 	InsertImagePermissionXref(imageId, permissionId string) error
@@ -64,7 +65,7 @@ type albumImageService struct {
 // GetImageAlbums retrieves the albums associated with an image.
 // Returns a map of album slugs to AlbumRecord and a slice of AlbumRecord, ir
 // an error if any.
-func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumRecord, []db.AlbumRecord, error) {
+func (s *albumImageService) GetImageAlbums(imageId string) (map[string]api.AlbumRecord, []api.AlbumRecord, error) {
 
 	// validate the image id
 	if !validate.IsValidUuid(imageId) {
@@ -85,7 +86,7 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumR
 		FROM album a
 			LEFT OUTER JOIN album_image ai ON a.uuid = ai.album_uuid
 		WHERE ai.image_uuid = ?`
-	var albums []db.AlbumRecord
+	var albums []api.AlbumRecord
 	if err := s.sql.SelectRecords(qry, &albums, imageId); err != nil {
 		return nil, nil, fmt.Errorf("failed to retrieve albums for image '%s': %v", imageId, err)
 	}
@@ -99,7 +100,7 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]db.AlbumR
 		wg    sync.WaitGroup
 		errCh = make(chan error, len(albums))
 
-		albumsMap = make(map[string]db.AlbumRecord, len(albums))
+		albumsMap = make(map[string]api.AlbumRecord, len(albums))
 		mu        sync.Mutex
 	)
 
@@ -149,7 +150,7 @@ func (s *albumImageService) InsertImagePermissionXref(imageId, permissionId stri
 	}
 
 	// build the xref record to insert
-	xref := db.ImagePermissionXref{
+	xref := permission.ImagePermissionXref{
 		Id:           0, // auto-incremented by the database
 		ImageId:      imageId,
 		PermissionId: permissionId,
@@ -204,7 +205,7 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 
 	// get all albums to validate the cmd album slugs exist
 	qry := `SELECT uuid, title, description, slug, slug_index, created_at, updated_at, is_archived FROM album`
-	var allAlbums []db.AlbumRecord
+	var allAlbums []api.AlbumRecord
 	if err := s.sql.SelectRecords(qry, &allAlbums); err != nil {
 		return fmt.Errorf("failed to retrieve all albums for validation: %v", err)
 	}
@@ -214,7 +215,7 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 		wg    sync.WaitGroup
 		errCh = make(chan error, len(allAlbums))
 	)
-	allAlbumsMap := make(map[string]db.AlbumRecord, len(allAlbums))
+	allAlbumsMap := make(map[string]api.AlbumRecord, len(allAlbums))
 	mu := &sync.Mutex{}
 
 	for i := range allAlbums {
@@ -246,7 +247,7 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 	}
 
 	// build a map of the new album slugs for easy lookup
-	newAlbumsMap := make(map[string]db.AlbumRecord, len(albumSlugs))
+	newAlbumsMap := make(map[string]api.AlbumRecord, len(albumSlugs))
 
 	// check that each provided album slug exists and if so add to the newAlbumsMap
 	for _, slug := range albumSlugs {
@@ -269,8 +270,8 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 
 	// determine which albums need to be added and which need to be removed
 	var (
-		toAdd    []db.AlbumRecord
-		toRemove []db.AlbumRecord
+		toAdd    []api.AlbumRecord
+		toRemove []api.AlbumRecord
 	)
 
 	for slug, album := range newAlbumsMap {
@@ -305,7 +306,7 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 					image_uuid, 
 					created_at) 
 				VALUES (?, ?, ?, ?)`
-				xref := db.AlbumImageXref{
+				xref := api.AlbumImageXref{
 					Id:        0, // auto-incremented by the database
 					AlbumId:   albumId,
 					ImageId:   imageId,

@@ -15,11 +15,10 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
+	"github.com/tdeslauriers/pixie/internal/crypt"
+	"github.com/tdeslauriers/pixie/internal/pipeline"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
-	"github.com/tdeslauriers/pixie/pkg/crypt"
-	"github.com/tdeslauriers/pixie/pkg/pipeline"
 )
 
 // ImageService is the interface for the image processing service.
@@ -32,7 +31,7 @@ type ImageService interface {
 	GetImageData(slug string, userPs map[string]permissions.PermissionRecord) (*api.ImageData, error)
 
 	// UpdateImageData updates an existing image record in the database.
-	UpdateImageData(ctx context.Context, existing *api.ImageData, updated *db.ImageRecord) error
+	UpdateImageData(ctx context.Context, existing *api.ImageData, updated *api.ImageRecord) error
 
 	// BuildPlaceholder builds the metadata for a placeholder image record.
 	// eg, the id, slug, title, and description provided by the user.
@@ -93,7 +92,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 	}
 
 	// build query based on the user's permissions
-	qry := db.BuildGetImageQuery(userPs)
+	qry := BuildGetImageQuery(userPs)
 
 	// create the []args ...interface{} slice
 	args := make([]interface{}, 0, len(userPs)+1)
@@ -108,34 +107,34 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 		}
 	}
 
-	var record db.ImageRecord
+	var record api.ImageRecord
 	if err := s.sql.SelectRecord(qry, &record, args...); err != nil {
 		// all of the following presume the user is not a curator/admin.
 		if err == sql.ErrNoRows {
 
 			// check if the image exists at all
-			if exists, err := s.sql.SelectExists(db.BuildImageExistsQry(), index); err != nil {
+			if exists, err := s.sql.SelectExists(BuildImageExistsQry(), index); err != nil {
 				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
 			} else if !exists {
 				return nil, fmt.Errorf("image '%s' was not found", slug)
 			}
 
 			// check if the image exists but the user has not permissions
-			if exists, err := s.sql.SelectExists(db.BuildImagePermissionsQry(userPs), args...); err != nil {
+			if exists, err := s.sql.SelectExists(BuildImagePermissionsQry(userPs), args...); err != nil {
 				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
 			} else if exists {
 				return nil, fmt.Errorf("user does not have permission to view image '%s'", slug)
 			}
 
 			// check if the image is archived
-			if exists, err := s.sql.SelectExists(db.BuildImageArchivedQry(), index); err != nil {
+			if exists, err := s.sql.SelectExists(BuildImageArchivedQry(), index); err != nil {
 				return nil, fmt.Errorf("failed to check if image is archived for slug '%s': %v", slug, err)
 			} else if exists {
 				return nil, fmt.Errorf("image '%s' is archived", slug)
 			}
 
 			// check if the image is published
-			if exists, err := s.sql.SelectExists(db.BuildImagePublishedQry(), index); err != nil {
+			if exists, err := s.sql.SelectExists(BuildImagePublishedQry(), index); err != nil {
 				return nil, fmt.Errorf("failed to check if image is published for slug '%s': %v", slug, err)
 			} else if exists {
 				return nil, fmt.Errorf("image '%s' is not published", slug)
@@ -296,7 +295,7 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholde
 
 	// incomplete/stubbed image record missing fields that will be filled in later
 	// when the image file is processed and the object storage service notifies the image service
-	record := db.ImageRecord{
+	record := api.ImageRecord{
 		Id:          id.String(),
 		Title:       strings.TrimSpace(cmd.Title),
 		Description: strings.TrimSpace(cmd.Description),
@@ -384,7 +383,7 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholde
 // updates an existing image record in the database.
 // NOTE: the only reason existing is passed is so that we check if the ojbectstore needs to be updated
 // due to a new ojbect key being generated.
-func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageData, updated *db.ImageRecord) error {
+func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageData, updated *api.ImageRecord) error {
 
 	// create function scoped logger
 	// add telemetry fields from context if exists

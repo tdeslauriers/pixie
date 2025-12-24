@@ -13,10 +13,10 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
+	"github.com/tdeslauriers/pixie/internal/album"
+	"github.com/tdeslauriers/pixie/internal/permission"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
-	"github.com/tdeslauriers/pixie/pkg/permission"
 )
 
 var (
@@ -33,12 +33,19 @@ type ImageHandler interface {
 }
 
 // NewHandler creates a new image handler instance, returning a pointer to the concrete implementation.
-func NewImageHandler(s Service, p permission.Service, s2s, iam jwt.Verifier) ImageHandler {
+func NewHandler(
+	s Service,
+	a album.Service,
+	p permission.Service,
+	s2s jwt.Verifier,
+	iam jwt.Verifier,
+) ImageHandler {
 	return &imageHandler{
-		svc:   s,
-		perms: p,
-		s2s:   s2s,
-		iam:   iam,
+		svc:    s,
+		albums: a,
+		perms:  p,
+		s2s:    s2s,
+		iam:    iam,
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
@@ -51,10 +58,11 @@ var _ ImageHandler = (*imageHandler)(nil)
 
 // imageHandler is a concrete implementation of the Handler interface.
 type imageHandler struct {
-	svc   Service
-	perms permission.Service
-	s2s   jwt.Verifier
-	iam   jwt.Verifier
+	svc    Service
+	albums album.Service
+	perms  permission.Service
+	s2s    jwt.Verifier
+	iam    jwt.Verifier
 
 	logger *slog.Logger
 }
@@ -153,7 +161,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 	if _, ok := usrPsMap[util.PermissionCurator]; ok {
 
 		type albumsResult struct {
-			records []db.AlbumRecord
+			records []api.AlbumRecord
 			err     error
 		}
 		type permissionsResult struct {
@@ -190,7 +198,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 					"err", albumsRes.err.Error())
 			}
 		} else {
-			albums, err := mapAlbumRecordsToApi(albumsRes.records)
+			albums, err := album.MapAlbumRecordsToApi(albumsRes.records)
 			if err != nil {
 				log.Error("failed to map album records to album data struct", "err", err.Error())
 				e := connect.ErrorHttp{
@@ -355,7 +363,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 
 	// build image record that are allowed to be updated
 	// Note: more fields can be added here as needed
-	updated := &db.ImageRecord{
+	updated := &api.ImageRecord{
 		Id:          existing.Id, // id should not change
 		Title:       cmd.Title,
 		Description: cmd.Description,
@@ -530,7 +538,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 
 				go func(albId, imgId string) {
 					// add the image to the album by updating xref table
-					if err := h.svc.InsertAlbumImageXref(albId, imgId); err != nil {
+					if err := h.albums.InsertAlbumImageXref(albId, imgId); err != nil {
 						log.Error(fmt.Sprintf("failed to add image to album '%s'", albId), "err", err.Error())
 						return
 					}
@@ -597,7 +605,7 @@ func (h *imageHandler) getValidAlbumIds(ctx context.Context, username string, al
 	}
 
 	// get the user's allowed albums
-	allowed, _, err := h.svc.GetAllowedAlbums(ps)
+	allowed, _, err := h.albums.GetAllowedAlbums(ps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve %s's allowed albums: %v", username, err)
 	}
