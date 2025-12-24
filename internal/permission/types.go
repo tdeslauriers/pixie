@@ -1,6 +1,8 @@
 package permission
 
 import (
+	"database/sql"
+
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 )
@@ -13,7 +15,7 @@ type Service interface {
 }
 
 // NewService creates a new service instance, returning a pointer to the concrete implementation.
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Service {
+func NewService(sql *sql.DB, i data.Indexer, c data.Cryptor) Service {
 	return &service{
 		Service:                 permissions.NewService(sql, i, c),
 		PatronPermissionService: NewPatronPermissionService(sql, i, c),
