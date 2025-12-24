@@ -8,7 +8,6 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
@@ -16,7 +15,7 @@ import (
 type ImageCryptor interface {
 
 	// EncryptImageRecord encrypts sensitive fields in the ImageRecord struct.
-	EncryptImageRecord(image *db.ImageRecord) error
+	EncryptImageRecord(image *api.ImageRecord) error
 
 	// EncryptImageData encrypts sensitive fields in the ImageData struct.
 	EncryptImageData(image *api.ImageData) error
@@ -25,7 +24,7 @@ type ImageCryptor interface {
 	DecryptImageData(image *api.ImageData) error
 
 	// DecryptImageRecord decrypts sensitive fields in the ImageRecord struct.
-	DecryptImageRecord(image *db.ImageRecord) error
+	DecryptImageRecord(image *api.ImageRecord) error
 }
 
 // NewCryptor creates a new ImageCryptor instance, returning a pointer to the concrete implementation.
@@ -52,7 +51,7 @@ type imageCryptor struct {
 }
 
 // EncryptImageRecord encrypts sensitive fields in the ImageRecord struct.
-func (ic *imageCryptor) EncryptImageRecord(image *db.ImageRecord) error {
+func (ic *imageCryptor) EncryptImageRecord(image *api.ImageRecord) error {
 	if image == nil {
 		return fmt.Errorf("image record cannot be nil")
 	}
@@ -234,7 +233,7 @@ func (ic *imageCryptor) DecryptImageData(image *api.ImageData) error {
 }
 
 // DecryptImageRecord is a wrapper function that decrypts sensitive fields in the ImageRecord struct.
-func (ic *imageCryptor) DecryptImageRecord(image *db.ImageRecord) error {
+func (ic *imageCryptor) DecryptImageRecord(image *api.ImageRecord) error {
 	if image == nil {
 		return fmt.Errorf("image record cannot be nil")
 	}

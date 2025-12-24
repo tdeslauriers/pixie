@@ -8,7 +8,6 @@ import (
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
 	"github.com/tdeslauriers/pixie/pkg/api"
 )
 
@@ -16,13 +15,13 @@ import (
 type AlbumCryptor interface {
 
 	// EncryptAlbumRecord encrypts sensitive fields in the AlbumRecord struct.
-	EncryptAlbumRecord(a *db.AlbumRecord) error
+	EncryptAlbumRecord(a *api.AlbumRecord) error
 
 	// EncryptAlbum encrypts sensitive fields in the Album struct.
 	EncryptAlbum(a *api.Album) error
 
 	// DecryptAlbumRecord decrypts sensitive fields in the AlbumRecord struct.
-	DecryptAlbumRecord(a *db.AlbumRecord) error
+	DecryptAlbumRecord(a *api.AlbumRecord) error
 
 	// DecryptAlbum decrypts sensitive fields in the Album struct.
 	DecryptAlbum(a *api.Album) error
@@ -54,7 +53,7 @@ type albumCryptor struct {
 // EncryptAlbumRecord is a wrapper function around the generalized
 // field encryption function, encryptAlbumFields,
 // that encrypts the sensitive fields in the album record struct.
-func (ac *albumCryptor) EncryptAlbumRecord(a *db.AlbumRecord) error {
+func (ac *albumCryptor) EncryptAlbumRecord(a *api.AlbumRecord) error {
 	if a == nil {
 		return fmt.Errorf("album record cannot be nil")
 	}
@@ -119,22 +118,16 @@ func (ac *albumCryptor) encryptAlbumFields(
 	}
 
 	// set the encrypted fields in the album record
-	if titlePtr != nil {
-		if title, ok := <-titleCh; ok {
-			*titlePtr = title
-		}
+	if title, ok := <-titleCh; ok {
+		*titlePtr = title
 	}
 
-	if descriptionPtr != nil {
-		if desc, ok := <-descriptionCh; ok {
-			*descriptionPtr = desc
-		}
+	if desc, ok := <-descriptionCh; ok {
+		*descriptionPtr = desc
 	}
 
-	if slugPtr != nil {
-		if slug, ok := <-slugCh; ok {
-			*slugPtr = slug
-		}
+	if slug, ok := <-slugCh; ok {
+		*slugPtr = slug
 	}
 
 	return nil
@@ -161,7 +154,7 @@ func (ac *albumCryptor) encrypt(field, plaintext string, fieldCh chan string, er
 }
 
 // decryptAlbumRecord is a wrapper function for decrypting sensitive fields in the AlbumRecord struct.
-func (ac *albumCryptor) DecryptAlbumRecord(a *db.AlbumRecord) error {
+func (ac *albumCryptor) DecryptAlbumRecord(a *api.AlbumRecord) error {
 	if a == nil {
 		return fmt.Errorf("album record cannot be nil")
 	}

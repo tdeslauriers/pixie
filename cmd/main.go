@@ -6,8 +6,8 @@ import (
 	"os"
 
 	"github.com/tdeslauriers/carapace/pkg/config"
+	"github.com/tdeslauriers/pixie/internal/gallery"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/gallery"
 )
 
 func main() {

@@ -17,10 +17,10 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
+	"github.com/tdeslauriers/pixie/internal/crypt"
 	"github.com/tdeslauriers/pixie/internal/util"
-	"github.com/tdeslauriers/pixie/pkg/adaptors/db"
+
 	"github.com/tdeslauriers/pixie/pkg/api"
-	"github.com/tdeslauriers/pixie/pkg/crypt"
 )
 
 // ImagePipline provides methods for processing image files submitted to the pipeline.
@@ -573,7 +573,7 @@ func (p *imagePipeline) ReprocessQueue() {
 				}
 
 				// create xref
-				if err := p.linkToAlbum(year, &db.ImageRecord{Id: cmd.Id}); err != nil {
+				if err := p.linkToAlbum(year, &api.ImageRecord{Id: cmd.Id}); err != nil {
 					log.Error(fmt.Sprintf("failed to create album xref for year %s for image with id %s for reprocess command (attempt %d): %v", year, cmd.Id, cmd.RetryCount, err))
 					cmd.RetryCount++ // increment retry count
 					// TODO: re-queue the command for retry if under max retries
@@ -608,7 +608,7 @@ func (p *imagePipeline) resizeAndPut(src image.Image, targetWidth int, objKey st
 
 // getImageRecord is a help retrieves the image record from the database using the provided object key.
 // Exists to abstract away this logic from the main processing loop.
-func (p *imagePipeline) getImageRecord(slug string) (*db.ImageRecord, error) {
+func (p *imagePipeline) getImageRecord(slug string) (*api.ImageRecord, error) {
 
 	// validate slug
 	// redundant check, but good practice
@@ -643,7 +643,7 @@ func (p *imagePipeline) getImageRecord(slug string) (*db.ImageRecord, error) {
 			is_published 
 		FROM image 
 		WHERE slug_index = ?;`
-	var record db.ImageRecord
+	var record api.ImageRecord
 	if err := p.db.SelectRecord(qry, &record, index); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no image record found for slug %s", slug)
@@ -661,7 +661,7 @@ func (p *imagePipeline) getImageRecord(slug string) (*db.ImageRecord, error) {
 
 // updateImageRecord is a helper which updates the image record in the database based on
 // the exif data if present. Exists to abstract away this logic from the main processing loop.
-func (p *imagePipeline) updateImageRecord(img *db.ImageRecord) error {
+func (p *imagePipeline) updateImageRecord(img *api.ImageRecord) error {
 
 	// validate image record
 	if img == nil {
@@ -718,7 +718,7 @@ func (p *imagePipeline) getImageAlbums(imageUuid string) (map[string]struct{}, e
 		FROM album a
 			LEFT OUTER JOIN album_image ai ON a.uuid = ai.album_uuid
 		WHERE ai.image_uuid = ?;`
-	var albums []db.AlbumRecord
+	var albums []api.AlbumRecord
 	if err := p.db.SelectRecords(qry, &albums, imageUuid); err != nil {
 		return nil, fmt.Errorf("failed to query albums for image id - %s: %v", imageUuid, err)
 	}
@@ -742,7 +742,7 @@ func (p *imagePipeline) getImageAlbums(imageUuid string) (map[string]struct{}, e
 // linkToAlbum is a helper which links the image to an existing album by title,
 // or creates a new album if one does not exist. Exists to abstract away this logic
 // from the main processing loop for readability.
-func (p *imagePipeline) linkToAlbum(title string, img *db.ImageRecord) error {
+func (p *imagePipeline) linkToAlbum(title string, img *api.ImageRecord) error {
 
 	// validate inputs
 	if title == "" {
@@ -773,12 +773,12 @@ func (p *imagePipeline) linkToAlbum(title string, img *db.ImageRecord) error {
 			updated_at,
 			is_archived
 		FROM album`
-	var album []db.AlbumRecord
+	var album []api.AlbumRecord
 	if err := p.db.SelectRecords(qry, &album); err != nil {
 		return fmt.Errorf("failed to query all album records: %v", err)
 	}
 
-	albumMap := make(map[string]db.AlbumRecord, len(album))
+	albumMap := make(map[string]api.AlbumRecord, len(album))
 	for _, a := range album {
 		if err := p.cryptor.DecryptAlbumRecord(&a); err != nil {
 			return fmt.Errorf("failed to decrypt album record for album with id %s: %v", a.Id, err)
@@ -810,7 +810,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *db.ImageRecord) error {
 		}
 
 		// this will always be a year album, so description is standardized
-		newAlbum := db.AlbumRecord{
+		newAlbum := api.AlbumRecord{
 			Id:          id.String(),
 			Title:       title,
 			Description: fmt.Sprintf("Auto-generated album for year %s", title),
@@ -854,7 +854,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *db.ImageRecord) error {
 			image_uuid,
 			created_at
 		) VALUES (?, ?, ?, ?)`
-	xref := db.AlbumImageXref{
+	xref := api.AlbumImageXref{
 		Id:        0,
 		AlbumId:   albumId,
 		ImageId:   img.Id,
