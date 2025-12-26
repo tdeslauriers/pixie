@@ -2,6 +2,7 @@ package picture
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,7 +14,6 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/crypt"
-	"github.com/tdeslauriers/pixie/internal/permission"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/api"
 )
@@ -37,9 +37,9 @@ type AlbumImageService interface {
 }
 
 // NewAlbumImageService creates a new AlbumImageService instace and returns a pointer to the concrete implementation.
-func NewAlbumImageService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) AlbumImageService {
+func NewAlbumImageService(sql *sql.DB, i data.Indexer, c data.Cryptor) AlbumImageService {
 	return &albumImageService{
-		sql:     sql,
+		sql:     NewAlbumImageRepository(sql),
 		indexer: i,
 		cryptor: crypt.NewCryptor(c),
 
@@ -55,7 +55,7 @@ var _ AlbumImageService = (*albumImageService)(nil)
 // It manages the xref between albums and images.
 // This service is responsible for creating, updating, and deleting album-image xrefs.
 type albumImageService struct {
-	sql     data.SqlRepository
+	sql     AlbumImageRepository
 	indexer data.Indexer
 	cryptor crypt.Cryptor
 
@@ -72,22 +72,9 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]api.Album
 		return nil, nil, fmt.Errorf("image Id must be a valid UUID")
 	}
 
-	// build the query to get the albums associated with the image
-	qry := `
-		SELECT 
-			a.uuid,
-			a.title,
-			a.description,
-			a.slug,
-			a.slug_index,
-			a.created_at,
-			a.updated_at,
-			a.is_archived
-		FROM album a
-			LEFT OUTER JOIN album_image ai ON a.uuid = ai.album_uuid
-		WHERE ai.image_uuid = ?`
-	var albums []api.AlbumRecord
-	if err := s.sql.SelectRecords(qry, &albums, imageId); err != nil {
+	// get the albums associated with the image id from database
+	albums, err := s.sql.FindAlbumByImgId(imageId)
+	if err != nil {
 		return nil, nil, fmt.Errorf("failed to retrieve albums for image '%s': %v", imageId, err)
 	}
 
@@ -150,20 +137,15 @@ func (s *albumImageService) InsertImagePermissionXref(imageId, permissionId stri
 	}
 
 	// build the xref record to insert
-	xref := permission.ImagePermissionXref{
+	xref := ImagePermissionXref{
 		Id:           0, // auto-incremented by the database
 		ImageId:      imageId,
 		PermissionId: permissionId,
 		CreatedAt:    data.CustomTime{Time: time.Now().UTC()},
 	}
-	qry := `
-		INSERT INTO image_permission (
-			id, 
-			image_uuid, 
-			permission_uuid, 
-			created_at
-		) VALUES (?, ?, ?, ?)`
-	if err := s.sql.InsertRecord(qry, xref); err != nil {
+
+	// insert the xref record into the database
+	if err := s.sql.InsertImagePermissionXref(xref); err != nil {
 		return fmt.Errorf("failed to insert image_permission xref record: %v", err)
 	}
 
@@ -203,10 +185,9 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 		}
 	}
 
-	// get all albums to validate the cmd album slugs exist
-	qry := `SELECT uuid, title, description, slug, slug_index, created_at, updated_at, is_archived FROM album`
-	var allAlbums []api.AlbumRecord
-	if err := s.sql.SelectRecords(qry, &allAlbums); err != nil {
+	// get all albums from db to validate the cmd album slugs exist
+	allAlbums, err := s.sql.FindAllAlbums()
+	if err != nil {
 		return fmt.Errorf("failed to retrieve all albums for validation: %v", err)
 	}
 
@@ -299,23 +280,18 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 			xrefWg.Add(1)
 			go func(albumId string) {
 				defer xrefWg.Done()
-				qry := `
-				INSERT INTO album_image (
-					id, 
-					album_uuid, 
-					image_uuid, 
-					created_at) 
-				VALUES (?, ?, ?, ?)`
+
 				xref := api.AlbumImageXref{
 					Id:        0, // auto-incremented by the database
 					AlbumId:   albumId,
 					ImageId:   imageId,
 					CreatedAt: data.CustomTime{Time: time.Now().UTC()},
 				}
-				if err := s.sql.InsertRecord(qry, xref); err != nil {
+				if err := s.sql.InsertAlbumImageXref(xref); err != nil {
 					xrefErrCh <- fmt.Errorf("failed to add album '%s' to image '%s': %v", albumId, imageId, err)
 					return
 				}
+
 				log.Info(fmt.Sprintf("added album '%s' to image '%s'", albumId, imageId))
 			}(a.Id)
 		}
@@ -324,11 +300,12 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 			xrefWg.Add(1)
 			go func(albumId string) {
 				defer xrefWg.Done()
-				qry := `DELETE FROM album_image WHERE album_uuid = ? AND image_uuid = ?`
-				if err := s.sql.DeleteRecord(qry, albumId, imageId); err != nil {
+
+				if err := s.sql.DeleteAlbumImageXref(albumId, imageId); err != nil {
 					xrefErrCh <- fmt.Errorf("failed to remove album '%s' from image '%s': %v", albumId, imageId, err)
 					return
 				}
+
 				log.Info(fmt.Sprintf("removed album '%s' from image '%s'", albumId, imageId))
 			}(a.Id)
 		}

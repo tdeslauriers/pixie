@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tdeslauriers/carapace/pkg/connect"
 	"github.com/tdeslauriers/carapace/pkg/data"
-	"github.com/tdeslauriers/carapace/pkg/permissions"
+	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
 	"github.com/tdeslauriers/pixie/internal/crypt"
@@ -28,7 +28,7 @@ type ImageService interface {
 
 	// GetImageData retrieves image data from the database (based on the user's permissions) and
 	// fetches signed URL for the image.
-	GetImageData(slug string, userPs map[string]permissions.PermissionRecord) (*api.ImageData, error)
+	GetImageData(slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error)
 
 	// UpdateImageData updates an existing image record in the database.
 	UpdateImageData(ctx context.Context, existing *api.ImageData, updated *api.ImageRecord) error
@@ -42,14 +42,14 @@ type ImageService interface {
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
 func NewImageService(
-	sql data.SqlRepository,
+	sql *sql.DB,
 	i data.Indexer, c data.Cryptor,
 	obj storage.ObjectStorage,
 	q chan pipeline.ReprocessCmd,
 ) ImageService {
 
 	return &imageService{
-		sql:       sql,
+		db:        NewRepository(sql),
 		indexer:   i,
 		cryptor:   crypt.NewCryptor(c),
 		store:     obj,
@@ -65,7 +65,7 @@ var _ ImageService = (*imageService)(nil)
 
 // imageService is the concrete implementation of the ImageService interface.
 type imageService struct {
-	sql       data.SqlRepository
+	db        Repository
 	indexer   data.Indexer
 	cryptor   crypt.Cryptor // image data specific wrapper around data.Cryptor
 	store     storage.ObjectStorage
@@ -77,7 +77,7 @@ type imageService struct {
 // GetImageData is the concrete implementation of the interface method which
 // retrieves image data from the database (based on the user's permissions) and
 // fetches signed URL for the image.
-func (s *imageService) GetImageData(slug string, userPs map[string]permissions.PermissionRecord) (*api.ImageData, error) {
+func (s *imageService) GetImageData(slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error) {
 
 	// validate the slug
 	// redundant check, but good practice
@@ -91,50 +91,35 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 		return nil, fmt.Errorf("failed to generate blind index for image slug '%s': %v", slug, err)
 	}
 
-	// build query based on the user's permissions
-	qry := BuildGetImageQuery(userPs)
-
-	// create the []args ...interface{} slice
-	args := make([]interface{}, 0, len(userPs)+1)
-
-	// add the slug index as the first argument
-	args = append(args, index)
-
-	// if the user is not a curator/admin, add the permission uuids as the remaining arguments
-	if _, ok := userPs[util.PermissionCurator]; !ok {
-		for _, p := range userPs {
-			args = append(args, p.Id)
-		}
-	}
-
-	var record api.ImageRecord
-	if err := s.sql.SelectRecord(qry, &record, args...); err != nil {
+	// get image from database based on user's permissions
+	record, err := s.db.FindImageByPermissions(index, userPs)
+	if err != nil {
 		// all of the following presume the user is not a curator/admin.
 		if err == sql.ErrNoRows {
 
 			// check if the image exists at all
-			if exists, err := s.sql.SelectExists(BuildImageExistsQry(), index); err != nil {
+			if exists, err := s.db.ImageExists(index); err != nil {
 				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
 			} else if !exists {
 				return nil, fmt.Errorf("image '%s' was not found", slug)
 			}
 
 			// check if the image exists but the user has not permissions
-			if exists, err := s.sql.SelectExists(BuildImagePermissionsQry(userPs), args...); err != nil {
+			if exists, err := s.db.ImageExistsNoPermissions(index, userPs); err != nil {
 				return nil, fmt.Errorf("failed to check if image exists for slug '%s': %v", slug, err)
 			} else if exists {
 				return nil, fmt.Errorf("user does not have permission to view image '%s'", slug)
 			}
 
 			// check if the image is archived
-			if exists, err := s.sql.SelectExists(BuildImageArchivedQry(), index); err != nil {
+			if exists, err := s.db.ImageExistsArchived(index); err != nil {
 				return nil, fmt.Errorf("failed to check if image is archived for slug '%s': %v", slug, err)
 			} else if exists {
 				return nil, fmt.Errorf("image '%s' is archived", slug)
 			}
 
 			// check if the image is published
-			if exists, err := s.sql.SelectExists(BuildImagePublishedQry(), index); err != nil {
+			if exists, err := s.db.ImageExistsUnpublished(index); err != nil {
 				return nil, fmt.Errorf("failed to check if image is published for slug '%s': %v", slug, err)
 			} else if exists {
 				return nil, fmt.Errorf("image '%s' is not published", slug)
@@ -147,7 +132,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]permissions.P
 	}
 
 	// decrypt the sensitive fields in the image record
-	if err := s.cryptor.DecryptImageRecord(&record); err != nil {
+	if err := s.cryptor.DecryptImageRecord(record); err != nil {
 		return nil, fmt.Errorf("failed to decrypt image record for slug '%s': %v", slug, err)
 	}
 
@@ -330,26 +315,7 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholde
 	}
 
 	// insert record into the database
-	qry := `
-	INSERT INTO image (
-		uuid, 
-		title,
-		description,
-		file_name,
-		file_type,
-		object_key,
-		slug,
-		slug_index,
-		width,
-		height,
-		size,
-		image_date,
-		created_at,
-		updated_at,
-		is_archived,
-		is_published
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	if err := s.sql.InsertRecord(qry, copy); err != nil {
+	if err := s.db.InsertImage(copy); err != nil {
 		return nil, fmt.Errorf("failed to insert image record into database: %v", err)
 	}
 
@@ -420,6 +386,9 @@ func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageD
 		return fmt.Errorf("failed to generate blind index for image slug '%s': %v", updated.Slug, err)
 	}
 
+	// set the slug index for the updated image record
+	updated.SlugIndex = index
+
 	// need to encrypt a copy of the updated image record
 	encrypted := *updated
 
@@ -429,27 +398,7 @@ func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageD
 	}
 
 	// update the image record in the database
-	// NOTE: more fields can be added here as needed
-	qry := `
-		UPDATE image SET
-			title = ?,
-			description = ?,
-			object_key = ?,
-			image_date = ?,
-			updated_at = ?,
-			is_archived = ?,
-			is_published = ?
-		WHERE slug_index = ?`
-	if err := s.sql.UpdateRecord(
-		qry,
-		encrypted.Title,
-		encrypted.Description,
-		encrypted.ObjectKey,
-		encrypted.ImageDate,
-		encrypted.UpdatedAt,
-		encrypted.IsArchived,
-		encrypted.IsPublished,
-		index); err != nil {
+	if err := s.db.UpdateImage(encrypted); err != nil {
 		return fmt.Errorf("failed to update image record id '%s' in database: %v", existing.Id, err)
 	}
 

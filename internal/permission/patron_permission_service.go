@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"time"
@@ -27,9 +28,9 @@ type PatronPermissionService interface {
 }
 
 // NewPatronPermissionService creates a new PatronPermissionService instance, returning a pointer to the concrete implementation.
-func NewPatronPermissionService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) PatronPermissionService {
+func NewPatronPermissionService(sql *sql.DB, i data.Indexer, c data.Cryptor) PatronPermissionService {
 	return &patronPermissionService{
-		sql:     sql,
+		db:      NewRepository(sql),
 		indexer: i,
 		cryptor: exo.NewPermissionCryptor(c),
 
@@ -43,7 +44,7 @@ var _ PatronPermissionService = (*patronPermissionService)(nil)
 
 // patronPermissionService is the concrete implementation of the PatronPermissionService interface.
 type patronPermissionService struct {
-	sql     data.SqlRepository
+	db      Repository
 	indexer data.Indexer
 	cryptor exo.PermissionCryptor
 
@@ -76,25 +77,9 @@ func (s *patronPermissionService) GetPatronPermissions(ctx context.Context, user
 	}
 
 	// query the database for the patron's permissions
-	qry := `
-		SELECT 
-			p.uuid,
-			p.service_name,
-			p.permission,
-			p.name,
-			p.description,
-			p.created_at,
-			p.active,
-			p.slug,
-			p.slug_index
-		FROM permission p
-			LEFT OUTER JOIN patron_permission pp ON p.uuid = pp.permission_uuid
-			LEFT OUTER JOIN patron pat ON pp.patron_uuid = pat.uuid
-		WHERE pat.user_index = ?
-			AND p.active = TRUE`
-	var records []exo.PermissionRecord
-	if err := s.sql.SelectRecords(qry, &records, index); err != nil {
-		return nil, nil, err
+	records, err := s.db.FindPatronPermissions(index)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Failed to get patron %s's permissions from database %w", username, err)
 	}
 
 	// It is possible for patrons to have zero permissions.
@@ -141,8 +126,7 @@ func (s *patronPermissionService) AddPermissionToPatron(patronId, permissionId s
 	}
 
 	// insert the xref record into the database
-	qry := `INSERT INTO patron_permission (id, patron_uuid, permission_uuid, created_at) VALUES (?, ?, ?, ?)`
-	if err := s.sql.InsertRecord(qry, xref); err != nil {
+	if err := s.db.InsertPatronPermissionXref(xref); err != nil {
 		return fmt.Errorf("failed to add permission '%s' to patron '%s': %v", permissionId, patronId, err)
 	}
 
@@ -164,8 +148,7 @@ func (s *patronPermissionService) RemovePermissionFromPatron(patronId, permissio
 	}
 
 	// delete the xref record from the database
-	qry := `DELETE FROM patron_permission WHERE patron_uuid = ? AND permission_uuid = ?`
-	if err := s.sql.DeleteRecord(qry, patronId, permissionId); err != nil {
+	if err := s.db.DeletePatronPermissionXref(patronId, permissionId); err != nil {
 		return fmt.Errorf("failed to remove permission '%s' from patron '%s': %v", permissionId, patronId, err)
 	}
 

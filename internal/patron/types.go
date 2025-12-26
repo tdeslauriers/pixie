@@ -27,25 +27,6 @@ type handler struct {
 	PatronRegisterHandler
 }
 
-// Service is an interface aggregation of all service interfaces that manage patron records.
-type Service interface {
-	PatronService
-}
-
-// NewService creates a new Service instance, returning a pointer to the concrete implementation.
-func NewService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Service {
-	return &service{
-		PatronService: NewPatronService(sql, i, c),
-	}
-}
-
-var _ Service = (*service)(nil)
-
-// service is the concrete implementation of the Service interface.
-type service struct {
-	PatronService
-}
-
 // PatronRecord is a model which represents a patron record in the database.
 type PatronRecord struct {
 	Id         string          `db:"uuid" json:"uuid,omitempty"`

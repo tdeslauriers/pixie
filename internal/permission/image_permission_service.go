@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,9 +33,9 @@ type ImagePermissionService interface {
 }
 
 // NewImagePermissionService creates a new ImagePermissionService instance, returning a pointer to the concrete implementation.
-func NewImagePermissionService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) ImagePermissionService {
+func NewImagePermissionService(sql *sql.DB, i data.Indexer, c data.Cryptor) ImagePermissionService {
 	return &imagePermissionService{
-		sql:     sql,
+		sql:     NewRepository(sql),
 		indexer: i,
 		cryptor: exo.NewPermissionCryptor(c),
 
@@ -48,7 +49,7 @@ var _ ImagePermissionService = (*imagePermissionService)(nil)
 
 // imagePermissionService is the concrete implementation of the ImagePermissionService interface.
 type imagePermissionService struct {
-	sql     data.SqlRepository
+	sql     Repository
 	indexer data.Indexer
 	cryptor exo.PermissionCryptor
 
@@ -67,24 +68,9 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 	}
 
 	// build the query to get the permissions associated with the image
-	qry := `
-		SELECT 
-			p.uuid,
-			p.service_name,
-			p.permission,
-			p.name,
-			p.description,
-			p.created_at,
-			p.active,
-			p.slug,
-			p.slug_index
-		FROM permission p
-			LEFT OUTER JOIN image_permission ip ON p.uuid = ip.permission_uuid
-		WHERE ip.image_uuid = ?
-			AND p.active = TRUE`
-	var records []exo.PermissionRecord
-	if err := s.sql.SelectRecords(qry, &records, imageId); err != nil {
-		return nil, nil, err
+	records, err := s.sql.FindImagePermissions(imageId)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to retrieve image '%s' permissions from database: %w", imageId, err)
 	}
 
 	if len(records) == 0 {
@@ -161,10 +147,9 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 		}
 	}
 
-	// check if cmd permission slugs are real permission's slugs
-	qry := `SELECT uuid, service_name, permission, name, description, created_at, active, slug, slug_index FROM permission`
-	var records []exo.PermissionRecord
-	if err := s.sql.SelectRecords(qry, &records); err != nil {
+	// retrieve all permissions from the database
+	records, err := s.sql.FindAllPermissions()
+	if err != nil {
 		return fmt.Errorf("failed to retrieve all permissions: %v", err)
 	}
 
@@ -199,10 +184,10 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 		}(i, record)
 	}
 
-	// handle decryption errors
 	decryptWg.Wait()
 	close(decryptErrCh)
 
+	// handle decryption errors
 	if len(decryptErrCh) > 0 {
 		var errs []error
 		for e := range decryptErrCh {
@@ -213,7 +198,8 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 		}
 	}
 
-	// build a map of the new permissions to be associated with the image
+	// check if cmd permission slugs are real permission's slugs -> if it is real, add to newPsMap,
+	// else it will return an error and the operation will not complete.
 	// NOTE: map key must be the permission to match the return map of the GetImagePermissions method
 	newPsMap := make(map[string]exo.PermissionRecord, len(permissionSlugs))
 	for _, slug := range permissionSlugs {
@@ -280,14 +266,8 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 					PermissionId: permissionId,
 					CreatedAt:    data.CustomTime{Time: time.Now().UTC()},
 				}
-				qry := `
-					INSERT INTO image_permission (
-						id, 
-						image_uuid, 
-						permission_uuid, 
-						created_at) 
-					VALUES (?, ?, ?, ?)`
-				if err := s.sql.InsertRecord(qry, xref); err != nil {
+
+				if err := s.sql.InsertImagePermissionXref(xref); err != nil {
 					xrefErrCh <- fmt.Errorf("failed to add permission '%s' to image '%s': %v", p.Slug, imageId, err)
 					return
 				}
@@ -303,8 +283,7 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 				defer xrefWg.Done()
 
 				// remove the xref record
-				qry := `DELETE FROM image_permission WHERE image_uuid = ? AND permission_uuid = ?`
-				if err := s.sql.DeleteRecord(qry, imageId, permissionId); err != nil {
+				if err := s.sql.DeleteImagePermissionXref(imageId, permissionId); err != nil {
 					xrefErrCh <- fmt.Errorf("failed to remove permission '%s' from image '%s': %v", p.Id, imageId, err)
 					return
 				}

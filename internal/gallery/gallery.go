@@ -2,6 +2,7 @@ package gallery
 
 import (
 	"crypto/tls"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"sync"
@@ -115,8 +116,6 @@ func New(config *config.Config) (Gallery, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	repository := data.NewSqlRepository(db)
-
 	// indexer
 	hmacSecret, err := base64.StdEncoding.DecodeString(config.Database.IndexSecret)
 	if err != nil {
@@ -161,7 +160,7 @@ func New(config *config.Config) (Gallery, error) {
 		ClientSecret: config.ServiceAuth.ClientSecret,
 	}
 
-	tokenProvider := provider.NewS2sTokenProvider(s2s, s2sCreds, repository, cryptor)
+	tokenProvider := provider.NewS2sTokenProvider(s2s, s2sCreds, db, cryptor)
 
 	// create reprocess queue
 	reprocessQueue := make(chan pipeline.ReprocessCmd, 100)
@@ -169,7 +168,7 @@ func New(config *config.Config) (Gallery, error) {
 	return &gallery{
 		config:           *config,
 		serverTls:        serverTlsConfig,
-		repository:       repository,
+		repository:       db,
 		indexer:          indexer,
 		cryptor:          cryptor,
 		objectStorage:    objStore,
@@ -178,11 +177,11 @@ func New(config *config.Config) (Gallery, error) {
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
 		patVerifier:      pat.NewVerifier(util.ServiceS2s, s2s, tokenProvider),
-		pictures:         picture.NewService(repository, indexer, cryptor, objStore, reprocessQueue),
-		albums:           album.NewService(repository, indexer, cryptor, objStore),
-		staged:           album.NewStagedImageService(repository, indexer, cryptor, objStore),
-		patrons:          patron.NewService(repository, indexer, cryptor),
-		permissions:      permission.NewService(repository, indexer, cryptor),
+		pictures:         picture.NewService(db, indexer, cryptor, objStore, reprocessQueue),
+		albums:           album.NewService(db, indexer, cryptor, objStore),
+		staged:           album.NewStagedImageService(db, indexer, cryptor, objStore),
+		patrons:          patron.NewService(db, indexer, cryptor),
+		permissions:      permission.NewService(db, indexer, cryptor),
 
 		uploadQueue:    make(chan storage.WebhookPutObject, 100),
 		reprocessQueue: reprocessQueue,
@@ -200,7 +199,7 @@ var _ Gallery = (*gallery)(nil)
 type gallery struct {
 	config           config.Config
 	serverTls        *tls.Config
-	repository       data.SqlRepository
+	repository       *sql.DB
 	indexer          data.Indexer
 	cryptor          data.Cryptor
 	objectStorage    storage.ObjectStorage

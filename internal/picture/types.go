@@ -1,6 +1,7 @@
 package picture
 
 import (
+	"database/sql"
 	"strings"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
@@ -18,7 +19,7 @@ type Service interface {
 }
 
 func NewService(
-	sql data.SqlRepository,
+	sql *sql.DB,
 	i data.Indexer,
 	c data.Cryptor,
 	obj storage.ObjectStorage,
@@ -103,25 +104,6 @@ func BuildGetImageQuery(userPs map[string]permissions.PermissionRecord) string {
 	return qb.String()
 }
 
-// BuildImageExistsQry builds an SQL query to check if an image exists based on its slug.
-// It returns the query string and any parameters to be used in the query.
-// Note: at the moment, no params are needed or constructed, but this may change in the future.
-func BuildImageExistsQry() string {
-	var qb strings.Builder
-
-	// base query to check if the image exists
-	baseQry := `
-		SELECT EXISTS (
-			SELECT 1 
-			FROM image i
-			WHERE i.slug_index = ?`
-	qb.WriteString(baseQry)
-
-	qb.WriteString(")")
-
-	return qb.String()
-}
-
 // BuildImagePermissionsQry builds an sql query to check if an image exists but the user does not have permissions.
 func BuildImagePermissionsQry(userPs map[string]permissions.PermissionRecord) string {
 	var qb strings.Builder
@@ -149,45 +131,6 @@ func BuildImagePermissionsQry(userPs map[string]permissions.PermissionRecord) st
 	}
 
 	qb.WriteString(")")
-
-	return qb.String()
-}
-
-// BuildImageArchivedQry builds an SQL query to check if an image is archived.
-// It returns the query string and any parameters to be used in the query.
-// Note: at the moment, no params are needed or constructed, but this may change in the future.
-func BuildImageArchivedQry() string {
-	var qb strings.Builder
-
-	// base query to check if the image is archived
-	baseQry := `
-		SELECT EXISTS (
-			SELECT 1 
-			FROM image i
-				LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid
-				LEFT OUTER JOIN permission p ON ip.permission_uuid = p.uuid
-			WHERE i.slug_index = ?
-				AND i.is_archived = TRUE`
-	qb.WriteString(baseQry)
-
-	return qb.String()
-}
-
-// BuildImagePublishedQry builds an SQL query to check if an image is published.
-// It returns the query string and any parameters to be used in the query.
-// Note: at the moment, no params are needed or constructed, but this may change in the future.
-func BuildImagePublishedQry() string {
-	var qb strings.Builder
-
-	baseQry := `
-		SELECT EXISTS (
-			SELECT 1 
-			FROM image i
-				LEFT OUTER JOIN image_permission ip ON i.uuid = ip.image_uuid
-				LEFT OUTER JOIN permission p ON ip.permission_uuid = p.uuid
-			WHERE i.slug_index = ?
-				AND i.is_published = FALSE`
-	qb.WriteString(baseQry)
 
 	return qb.String()
 }

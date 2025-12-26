@@ -20,7 +20,7 @@ import (
 )
 
 // PermissionsService is the interface for managing a patrons permissions.
-type PatronService interface {
+type Service interface {
 
 	// GetByUsername retrieves a patron record by username from the database and
 	// performs necessary decryption.
@@ -41,9 +41,9 @@ type PatronService interface {
 }
 
 // NewService creates a new Patron service instance, returning a pointer to the concrete implementation.
-func NewPatronService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) PatronService {
+func NewService(sql *sql.DB, i data.Indexer, c data.Cryptor) Service {
 	return &patronService{
-		sql:         sql,
+		db:          NewPatronRepository(sql),
 		indexer:     i,
 		cryptor:     c,
 		permissions: permission.NewService(sql, i, c),
@@ -54,10 +54,10 @@ func NewPatronService(sql data.SqlRepository, i data.Indexer, c data.Cryptor) Pa
 	}
 }
 
-var _ PatronService = (*patronService)(nil)
+var _ Service = (*patronService)(nil)
 
 type patronService struct {
-	sql         data.SqlRepository
+	db          PatronRepository
 	indexer     data.Indexer
 	cryptor     data.Cryptor
 	permissions permission.Service
@@ -81,30 +81,13 @@ func (s *patronService) GetByUsername(ctx context.Context, username string) (*ap
 	}
 
 	// query the database for the patron record
-	qry := `
-		SELECT 
-			u.uuid,
-			u.username,
-			u.user_index,
-			u.slug,
-			u.slug_index,
-			u.created_at,
-			u.updated_at,
-			u.is_archived,
-			u.is_active
-		FROM patron u
-		WHERE u.user_index = ?`
-	var record PatronRecord
-	if err := s.sql.SelectRecord(qry, &record, index); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("patron with username '%s' not found", username)
-		} else {
-			return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", username, err)
-		}
+	record, err := s.db.FindByIndex(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", username, err)
 	}
 
 	// decrypt the patron's username and slug
-	if err := s.decryptPatron(&record); err != nil {
+	if err := s.decryptPatron(record); err != nil {
 		return nil, err
 	}
 
@@ -236,7 +219,7 @@ func (s *patronService) CreatePatron(username string) (*api.Patron, error) {
 
 	now := data.CustomTime{Time: time.Now().UTC()}
 
-	record := &PatronRecord{
+	record := PatronRecord{
 		Id:         id.String(),
 		Username:   string(encryptedUsername),
 		UserIndex:  userIndex,
@@ -249,21 +232,7 @@ func (s *patronService) CreatePatron(username string) (*api.Patron, error) {
 	}
 
 	// insert the patron record into the database
-	qry := `
-		INSERT INTO patron (
-			uuid,
-			username,
-			user_index,
-			slug,
-			slug_index,
-			created_at,
-			updated_at,
-			is_archived,
-			is_active
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?
-		)`
-	if err := s.sql.InsertRecord(qry, *record); err != nil {
+	if err := s.db.InsertPatron(record); err != nil {
 		return nil, fmt.Errorf("failed to insert patron record into database: %v", err)
 	}
 

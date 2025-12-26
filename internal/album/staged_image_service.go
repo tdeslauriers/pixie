@@ -2,6 +2,7 @@ package album
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,9 +35,9 @@ type StagedImageService interface {
 }
 
 // NewStagedImageService creates a new StagedImageService.
-func NewStagedImageService(sql data.SqlRepository, i data.Indexer, c data.Cryptor, obj storage.ObjectStorage) StagedImageService {
+func NewStagedImageService(sql *sql.DB, i data.Indexer, c data.Cryptor, obj storage.ObjectStorage) StagedImageService {
 	return &stagedImageService{
-		sql:      sql,
+		sql:      NewStagedRepository(sql),
 		indexer:  i,
 		cryptor:  crypt.NewCryptor(c),
 		objStore: obj,
@@ -52,7 +53,7 @@ var _ StagedImageService = (*stagedImageService)(nil)
 
 // stagedImageService is the default concrete implementation of StagedImageService.
 type stagedImageService struct {
-	sql      data.SqlRepository
+	sql      StagedRepository
 	indexer  data.Indexer
 	cryptor  crypt.Cryptor
 	objStore storage.ObjectStorage
@@ -81,30 +82,9 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 		Description: StagedAlbumDescription,
 	}
 
-	// get all unpublished images metadata
-	qry := `
-		SELECT
-			i.uuid,
-			i.title,
-			i.description,
-			i.file_name,
-			i.file_type,
-			i.object_key,
-			i.slug,
-			i.slug_index,
-			i.width,
-			i.height,
-			i.size,
-			i.image_date,
-			i.created_at,
-			i.updated_at,
-			i.is_archived,
-			i.is_published
-		FROM
-			image i
-		WHERE i.is_published = FALSE`
-	var images []api.ImageRecord
-	if err := s.sql.SelectRecords(qry, &images); err != nil {
+	// get all unpublished images metadata from database
+	images, err := s.sql.FindUnpublishedImages()
+	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve unpublished images from database when retrieving staged images: %v", err)
 	}
 

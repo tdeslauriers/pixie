@@ -44,7 +44,7 @@ func NewImagePipeline(
 	up chan storage.WebhookPutObject,
 	re chan ReprocessCmd,
 	wg *sync.WaitGroup,
-	db data.SqlRepository,
+	db *sql.DB,
 	i data.Indexer,
 	c data.Cryptor,
 	o storage.ObjectStorage,
@@ -55,7 +55,7 @@ func NewImagePipeline(
 		reprocessQueue: re,
 		wg:             wg,
 
-		db:       db,
+		db:       NewRepository(db),
 		indexer:  i,
 		cryptor:  crypt.NewCryptor(c),
 		objStore: o,
@@ -75,7 +75,7 @@ type imagePipeline struct {
 	reprocessQueue chan ReprocessCmd
 	wg             *sync.WaitGroup
 
-	db       data.SqlRepository
+	db       Repository
 	indexer  data.Indexer
 	cryptor  crypt.Cryptor
 	objStore storage.ObjectStorage
@@ -622,41 +622,18 @@ func (p *imagePipeline) getImageRecord(slug string) (*api.ImageRecord, error) {
 		return nil, fmt.Errorf("failed to obtain slug index for image with slug %s: %v", slug, err)
 	}
 
-	// query the database for the image record
-	qry := `
-		SELECT 
-			uuid,
-			title,
-			description,
-			file_name,
-			file_type,
-			object_key,
-			slug,
-			slug_index,
-			width,
-			height,
-			size,
-			image_date,
-			created_at,
-			updated_at,
-			is_archived,
-			is_published 
-		FROM image 
-		WHERE slug_index = ?;`
-	var record api.ImageRecord
-	if err := p.db.SelectRecord(qry, &record, index); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("no image record found for slug %s", slug)
-		}
-		return nil, fmt.Errorf("failed to query image record for slug %s: %v", slug, err)
+	// query the database for the image record by its slug index
+	record, err := p.db.FindImage(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query image record for slug %s: %w", slug, err)
 	}
 
 	// decrypt the image record fields
-	if err := p.cryptor.DecryptImageRecord(&record); err != nil {
+	if err := p.cryptor.DecryptImageRecord(record); err != nil {
 		return nil, fmt.Errorf("failed to decrypt image record for slug %s: %v", slug, err)
 	}
 
-	return &record, nil
+	return record, nil
 }
 
 // updateImageRecord is a helper which updates the image record in the database based on
@@ -674,25 +651,7 @@ func (p *imagePipeline) updateImageRecord(img *api.ImageRecord) error {
 	}
 
 	// update the image record in the database
-	qry := `
-		UPDATE image 
-		SET 
-			object_key = ?,
-			width = ?,
-			height = ?,
-			image_date = ?,
-			updated_at = ?,
-			is_published = ?
-		WHERE uuid = ?`
-	if err := p.db.UpdateRecord(qry,
-		img.ObjectKey,
-		img.Width,
-		img.Height,
-		img.ImageDate,
-		data.CustomTime{Time: time.Now().UTC()},
-		img.IsPublished,
-		img.Id); err != nil {
-
+	if err := p.db.UpdateImage(*img); err != nil {
 		return fmt.Errorf("failed to update image record in database for image with id %s: %v", img.Id, err)
 	}
 
@@ -704,23 +663,10 @@ func (p *imagePipeline) updateImageRecord(img *api.ImageRecord) error {
 // for readability.  It returns a map for easy lookups of album titles.
 func (p *imagePipeline) getImageAlbums(imageUuid string) (map[string]struct{}, error) {
 
-	// get albums associated with the image, if any -> possible none associated yet
-	qry := `
-		SELECT 
-			a.uuid,
-			a.title,
-			a.description,
-			a.slug,
-			a.slug_index,
-			a.created_at,
-			a.updated_at,
-			a.is_archived
-		FROM album a
-			LEFT OUTER JOIN album_image ai ON a.uuid = ai.album_uuid
-		WHERE ai.image_uuid = ?;`
-	var albums []api.AlbumRecord
-	if err := p.db.SelectRecords(qry, &albums, imageUuid); err != nil {
-		return nil, fmt.Errorf("failed to query albums for image id - %s: %v", imageUuid, err)
+	// get albums associated with the image from database, if any -> possible none associated yet
+	albums, err := p.db.FindImageAlbums(imageUuid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query albums for image id %s: %v", imageUuid, err)
 	}
 
 	// if albums found, decrypt them and make a quick lookup map
@@ -761,25 +707,14 @@ func (p *imagePipeline) linkToAlbum(title string, img *api.ImageRecord) error {
 		return fmt.Errorf("invalid image Id: %s", img.Id)
 	}
 
-	// get album records
-	qry := `
-		SELECT 
-			uuid,
-			title,
-			description,
-			slug,
-			slug_index,
-			created_at,
-			updated_at,
-			is_archived
-		FROM album`
-	var album []api.AlbumRecord
-	if err := p.db.SelectRecords(qry, &album); err != nil {
+	// get album records from database
+	albums, err := p.db.FindAllAlbums()
+	if err != nil {
 		return fmt.Errorf("failed to query all album records: %v", err)
 	}
 
-	albumMap := make(map[string]api.AlbumRecord, len(album))
-	for _, a := range album {
+	albumMap := make(map[string]api.AlbumRecord, len(albums))
+	for _, a := range albums {
 		if err := p.cryptor.DecryptAlbumRecord(&a); err != nil {
 			return fmt.Errorf("failed to decrypt album record for album with id %s: %v", a.Id, err)
 		}
@@ -827,18 +762,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *api.ImageRecord) error {
 		}
 
 		// insert the new album record into the database
-		qry := `
-			INSERT INTO album (
-				uuid,
-				title,
-				description,
-				slug,
-				slug_index,
-				created_at,
-				updated_at,
-				is_archived
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-		if err := p.db.InsertRecord(qry, newAlbum); err != nil {
+		if err := p.db.InsertAlbum(newAlbum); err != nil {
 			return fmt.Errorf("failed to insert new album record for album with title %s: %v", title, err)
 		}
 
@@ -847,20 +771,13 @@ func (p *imagePipeline) linkToAlbum(title string, img *api.ImageRecord) error {
 	}
 
 	// link the image to the album in the album_image xref table
-	qry = `
-		INSERT IGNORE INTO album_image (
-			id,
-			album_uuid,
-			image_uuid,
-			created_at
-		) VALUES (?, ?, ?, ?)`
 	xref := api.AlbumImageXref{
 		Id:        0,
 		AlbumId:   albumId,
 		ImageId:   img.Id,
 		CreatedAt: data.CustomTime{Time: time.Now().UTC()},
 	}
-	if err := p.db.InsertRecord(qry, xref); err != nil {
+	if err := p.db.InsertAlbumImageXref(xref); err != nil {
 		return fmt.Errorf("failed to link image with id %s to album with id %s: %v", img.Id, albumId, err)
 	}
 
