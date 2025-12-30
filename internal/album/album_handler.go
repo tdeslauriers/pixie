@@ -137,6 +137,7 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// get the user's permissions
 	ps, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
@@ -205,6 +206,7 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// extract the slug from the request URL
 	slug, err := connect.GetValidSlug(r)

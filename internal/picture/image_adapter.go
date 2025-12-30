@@ -201,12 +201,13 @@ func (r *repository) UpdateImage(record api.ImageRecord) error {
 	return data.UpdateRecord(
 		r.sql,
 		qry,
-		record.Title,
-		record.Description,
-		record.ObjectKey,
-		record.ImageDate,
-		record.UpdatedAt,
-		record.IsArchived,
-		record.IsPublished,
+		record.Title,       // update
+		record.Description, // update
+		record.ObjectKey,   // update
+		record.ImageDate,   // update
+		record.UpdatedAt,   // update
+		record.IsArchived,  // update
+		record.IsPublished, // update
+		record.SlugIndex,   // where clause
 	)
 }
