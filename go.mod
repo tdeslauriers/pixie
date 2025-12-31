@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/tdeslauriers/carapace v0.3.1
+	github.com/tdeslauriers/carapace v0.3.2
 )
 
 require (
@@ -32,7 +32,7 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
-	github.com/tinylib/msgp v1.6.1 // indirect
+	github.com/tinylib/msgp v1.6.2 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/image v0.34.0
 	golang.org/x/net v0.48.0 // indirect
