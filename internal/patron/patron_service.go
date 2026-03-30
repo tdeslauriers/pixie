@@ -83,7 +83,7 @@ func (s *patronService) GetByUsername(ctx context.Context, username string) (*ap
 	// query the database for the patron record
 	record, err := s.db.FindByIndex(index)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve patron by username '%s': %v", username, err)
+		return nil, err
 	}
 
 	// decrypt the patron's username and slug

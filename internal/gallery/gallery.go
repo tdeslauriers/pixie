@@ -83,6 +83,7 @@ func New(config *config.Config) (Gallery, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure minio client tls: %v", err)
 	}
+	minioTlsConfig.InsecureSkipVerify = true // skip cert verification for minio client since minio may be using self-signed certs
 
 	// object storage service
 	// set default link expiration to 10 minutes

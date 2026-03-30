@@ -2,7 +2,6 @@ package patron
 
 import (
 	"database/sql"
-	"errors"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 )
@@ -51,11 +50,7 @@ func (r *patronRepository) FindByIndex(index string) (*PatronRecord, error) {
 
 	p, err := data.SelectOneRecord[PatronRecord](r.db, qry, index)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, errors.New("username not found") // -> index not found
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	return &p, nil

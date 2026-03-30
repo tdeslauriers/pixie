@@ -124,6 +124,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
+	log = log.With("actor", authedUser.Claims.Subject)
 
 	// get slug from request
 	slug, err := connect.GetValidSlug(r)

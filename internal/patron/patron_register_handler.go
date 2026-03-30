@@ -2,6 +2,7 @@ package patron
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -104,7 +105,7 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 	// check if the patron already exists
 	existing, err := h.service.GetByUsername(ctx, strings.TrimSpace(cmd.Username))
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if err == sql.ErrNoRows {
 			log.Info(fmt.Sprintf("patron with username '%s' does not exist, proceeding with registration", cmd.Username))
 		} else {
 			log.Error("failed to check if patron already exists", "err", err.Error())
