@@ -9,7 +9,7 @@ docker build --pull --no-cache -t "${IMAGE_NAME}" .
 
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-docker run -d --rm -p $(op read "op://world_site/pixie_service_container_dev/port"):$(op read "op://world_site/pixie_service_container_dev/port") \
+docker run -d --rm --name "${CONTAINER_NAME}" -p $(op read "op://world_site/pixie_service_container_dev/port"):$(op read "op://world_site/pixie_service_container_dev/port") \
     -e PIXIE_SERVICE_CLIENT_ID=$(op read "op://world_site/pixie_service_container_dev/client_id") \
     -e PIXIE_SERVICE_PORT=":$(op read "op://world_site/pixie_service_container_dev/port")" \
     -e PIXIE_CA_CERT="$(op document get "service_ca_dev_cert" --vault world_site | base64 -w 0)" \
