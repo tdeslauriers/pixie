@@ -81,7 +81,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]exo.Permissio
 
 	// validate the slug
 	// redundant check, but good practice
-	if !validate.IsValidUuid(slug) {
+	if err := validate.ValidateUuid(slug); err != nil {
 		return nil, fmt.Errorf("image slug '%s' is not well-formed", slug)
 	}
 

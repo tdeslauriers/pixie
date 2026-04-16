@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
@@ -17,6 +18,15 @@ const (
 	AlbumDescriptionMaxLength = 255                         // Maximum length for image description
 	AlbumDescriptionRegex     = `^[\w\s.,!?'"()&-]{0,255}$` // Regex for image description, allows alphanumeric, spaces, punctuation, max 255 chars
 )
+
+var (
+	albumTitleRegex       = regexp.MustCompile(AlbumTitleRegex)
+	albumDescriptionRegex = regexp.MustCompile(AlbumDescriptionRegex)
+)
+
+func ValidateAlbumTitle(title string) bool {
+	return albumTitleRegex.MatchString(strings.TrimSpace(title))
+}
 
 // Album is a model which represents an album in the API response.
 type Album struct {
@@ -35,12 +45,14 @@ type Album struct {
 func (a *Album) Validate() error {
 
 	// if csrf is present, validate it
-	if a.Csrf != "" && !validate.IsValidUuid(a.Csrf) {
-		return fmt.Errorf("invalid CSRF token")
+	if a.Csrf != "" {
+		if err := validate.ValidateUuid(a.Csrf); err != nil {
+			return fmt.Errorf("invalid CSRF token")
+		}
 	}
 
 	// validate id
-	if !validate.IsValidUuid(a.Id) {
+	if err := validate.ValidateUuid(a.Id); err != nil {
 		return fmt.Errorf("invalid album Id: %s", a.Id)
 	}
 
@@ -49,7 +61,7 @@ func (a *Album) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(a.Title), AlbumTitleRegex) {
+	if !ValidateAlbumTitle(a.Title) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", AlbumTitleMinLength, AlbumTitleMaxLength)
 	}
 
@@ -58,12 +70,12 @@ func (a *Album) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(a.Description), AlbumDescriptionRegex) {
+	if !albumDescriptionRegex.MatchString(strings.TrimSpace(a.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", AlbumDescriptionMinLength, AlbumDescriptionMaxLength)
 	}
 
 	// validate slug
-	if !validate.IsValidUuid(a.Slug) {
+	if err := validate.ValidateUuid(a.Slug); err != nil {
 		return fmt.Errorf("invalid slug: %s", a.Slug)
 	}
 
@@ -83,8 +95,10 @@ type AddAlbumCmd struct {
 func (cmd *AddAlbumCmd) Validate() error {
 
 	// validate CSRF token, if present -> not always required
-	if cmd.Csrf != "" && !validate.IsValidUuid(cmd.Csrf) {
-		return fmt.Errorf("invalid CSRF token")
+	if cmd.Csrf != "" {
+		if err := validate.ValidateUuid(cmd.Csrf); err != nil {
+			return fmt.Errorf("invalid CSRF token")
+		}
 	}
 
 	// validate title
@@ -92,7 +106,7 @@ func (cmd *AddAlbumCmd) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), AlbumTitleRegex) {
+	if !ValidateAlbumTitle(cmd.Title) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", AlbumTitleMinLength, AlbumTitleMaxLength)
 	}
 
@@ -101,7 +115,7 @@ func (cmd *AddAlbumCmd) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), AlbumDescriptionRegex) {
+	if !albumDescriptionRegex.MatchString(strings.TrimSpace(cmd.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", AlbumDescriptionMinLength, AlbumDescriptionMaxLength)
 	}
 
@@ -119,8 +133,10 @@ type AlbumUpdateCmd struct {
 func (cmd *AlbumUpdateCmd) Validate() error {
 
 	// validate CSRF token, if present -> not always required
-	if cmd.Csrf != "" && !validate.IsValidUuid(cmd.Csrf) {
-		return fmt.Errorf("invalid CSRF token")
+	if cmd.Csrf != "" {
+		if err := validate.ValidateUuid(cmd.Csrf); err != nil {
+			return fmt.Errorf("invalid CSRF token")
+		}
 	}
 
 	// validate title
@@ -128,7 +144,7 @@ func (cmd *AlbumUpdateCmd) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), AlbumTitleRegex) {
+	if !ValidateAlbumTitle(cmd.Title) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", AlbumTitleMinLength, AlbumTitleMaxLength)
 	}
 
@@ -137,7 +153,7 @@ func (cmd *AlbumUpdateCmd) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), AlbumDescriptionRegex) {
+	if !albumDescriptionRegex.MatchString(strings.TrimSpace(cmd.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", AlbumDescriptionMinLength, AlbumDescriptionMaxLength)
 	}
 
@@ -160,8 +176,10 @@ type AlbumRecord struct {
 func (a *AlbumRecord) Validate() error {
 
 	// validate id if present
-	if a.Id != "" && !validate.IsValidUuid(a.Id) {
-		return fmt.Errorf("invalid album ID: %s", a.Id)
+	if a.Id != "" {
+		if err := validate.ValidateUuid(a.Id); err != nil {
+			return fmt.Errorf("invalid album ID: %s", a.Id)
+		}
 	}
 
 	// validate title
@@ -169,7 +187,7 @@ func (a *AlbumRecord) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(a.Title), AlbumTitleRegex) {
+	if !ValidateAlbumTitle(a.Title) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", AlbumTitleMinLength, AlbumTitleMaxLength)
 	}
 
@@ -178,13 +196,15 @@ func (a *AlbumRecord) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(a.Description), AlbumDescriptionRegex) {
+	if !albumDescriptionRegex.MatchString(strings.TrimSpace(a.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", AlbumDescriptionMinLength, AlbumDescriptionMaxLength)
 	}
 
 	// validate slug if present
-	if a.Slug != "" && !validate.IsValidUuid(a.Slug) {
-		return fmt.Errorf("invalid slug: %s", a.Slug)
+	if a.Slug != "" {
+		if err := validate.ValidateUuid(a.Slug); err != nil {
+			return fmt.Errorf("invalid slug: %s", a.Slug)
+		}
 	}
 
 	return nil

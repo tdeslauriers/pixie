@@ -239,7 +239,7 @@ func (s *albumService) GetAlbumBySlug(
 
 	// vadidate the slug is well formed
 	// redundant check, but good practice
-	if !validate.IsValidUuid(slug) {
+	if err := validate.ValidateUuid(slug); err != nil {
 		return nil, fmt.Errorf("invalid album slug: %s", slug)
 	}
 
@@ -588,10 +588,10 @@ func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
 
 	// validate the album id and image id
 	// redundant check, but good practice
-	if !validate.IsValidUuid(albumId) {
+	if err := validate.ValidateUuid(albumId); err != nil {
 		return fmt.Errorf("invalid album id: %s", albumId)
 	}
-	if !validate.IsValidUuid(imageId) {
+	if err := validate.ValidateUuid(imageId); err != nil {
 		return fmt.Errorf("invalid image id: %s", imageId)
 	}
 
@@ -604,7 +604,7 @@ func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
 	}
 
 	// insert the xref record into the database
-	if err := s.db.InsertAlbumImageXref( xref); err != nil {
+	if err := s.db.InsertAlbumImageXref(xref); err != nil {
 		return fmt.Errorf("failed to insert album-image xref record into database: %v", err)
 	}
 

@@ -68,7 +68,7 @@ type albumImageService struct {
 func (s *albumImageService) GetImageAlbums(imageId string) (map[string]api.AlbumRecord, []api.AlbumRecord, error) {
 
 	// validate the image id
-	if !validate.IsValidUuid(imageId) {
+	if err := validate.ValidateUuid(imageId); err != nil {
 		return nil, nil, fmt.Errorf("image Id must be a valid UUID")
 	}
 
@@ -127,12 +127,12 @@ func (s *albumImageService) GetImageAlbums(imageId string) (map[string]api.Album
 func (s *albumImageService) InsertImagePermissionXref(imageId, permissionId string) error {
 
 	// validate the image id
-	if !validate.IsValidUuid(imageId) {
+	if err := validate.ValidateUuid(imageId); err != nil {
 		return fmt.Errorf("image Id must be a valid UUID")
 	}
 
 	// validate the permission id
-	if !validate.IsValidUuid(permissionId) {
+	if err := validate.ValidateUuid(permissionId); err != nil {
 		return fmt.Errorf("permission Id must be a valid UUID")
 	}
 
@@ -168,7 +168,7 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 	}
 
 	// validate the image id
-	if !validate.IsValidUuid(imageId) {
+	if err := validate.ValidateUuid(imageId); err != nil {
 		return fmt.Errorf("image Id must be a valid UUID")
 	}
 
@@ -180,7 +180,7 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 
 	// validate each album slug
 	for _, slug := range albumSlugs {
-		if !validate.IsValidUuid(slug) {
+		if err := validate.ValidateUuid(slug); err != nil {
 			return fmt.Errorf("album slug '%s' must be a valid UUID", slug)
 		}
 	}

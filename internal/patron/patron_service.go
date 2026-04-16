@@ -70,7 +70,7 @@ type patronService struct {
 func (s *patronService) GetByUsername(ctx context.Context, username string) (*api.Patron, error) {
 
 	// validate the username
-	if err := validate.IsValidEmail(username); err != nil {
+	if err := validate.ValidateEmail(username); err != nil {
 		return nil, fmt.Errorf("invalid username '%s': %v", username, err)
 	}
 
@@ -173,7 +173,7 @@ func (s *patronService) CreatePatron(username string) (*api.Patron, error) {
 
 	// validate the username
 	// redundant check, but good practice
-	if err := validate.IsValidEmail(username); err != nil {
+	if err := validate.ValidateEmail(username); err != nil {
 		return nil, fmt.Errorf("invalid username '%s': %v", username, err)
 	}
 
@@ -276,7 +276,7 @@ func (s *patronService) UpdatePatronPermissions(ctx context.Context, pat *api.Pa
 
 	// validate the permissions slugs are well formed uuids
 	for _, slug := range slugs {
-		if !validate.IsValidUuid(slug) {
+		if err := validate.ValidateUuid(slug); err != nil {
 			return nil, nil, fmt.Errorf("invalid permission slug '%s'", slug)
 		}
 	}

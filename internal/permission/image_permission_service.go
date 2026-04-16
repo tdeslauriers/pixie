@@ -63,7 +63,7 @@ type imagePermissionService struct {
 func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string]exo.PermissionRecord, []exo.PermissionRecord, error) {
 
 	// validate the image id
-	if !validate.IsValidUuid(imageId) {
+	if err := validate.ValidateUuid(imageId); err != nil {
 		return nil, nil, fmt.Errorf("image Id must be a valid UUID")
 	}
 
@@ -136,13 +136,13 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 	}
 
 	// validate the image id
-	if !validate.IsValidUuid(imageId) {
+	if err := validate.ValidateUuid(imageId); err != nil {
 		return fmt.Errorf("image Id must be a valid UUID")
 	}
 
 	// validate the permission slugs
 	for _, slug := range permissionSlugs {
-		if !validate.IsValidUuid(slug) {
+		if err := validate.ValidateUuid(slug); err != nil {
 			return fmt.Errorf("permission slug '%s' is not valid", slug)
 		}
 	}

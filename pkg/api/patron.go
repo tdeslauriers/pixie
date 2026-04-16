@@ -31,7 +31,7 @@ func (c *PatronRegisterCmd) Validate() error {
 		return fmt.Errorf("username is required")
 	}
 
-	if err := validate.IsValidEmail(c.Username); err != nil {
+	if err := validate.ValidateEmail(c.Username); err != nil {
 		return fmt.Errorf("username %s is not a valid email address", c.Username)
 	}
 

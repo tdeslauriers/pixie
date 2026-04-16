@@ -67,13 +67,16 @@ func ParseObjectKey(objectKey string) (dir, file, ext, slug string, err error) {
 
 	// get the file extension from the file name
 	ext = filepath.Ext(file)
-	if ext == "" || !api.IsValidExtension(ext) {
+	if ext == "" || !api.ValidateExtension(ext) {
 		return "", "", "", "", fmt.Errorf("file extension must not be empty and must be a valid file type: %s", ext)
 	}
 
 	// get the slug from the file name
 	slug = strings.TrimSuffix(file, ext)
-	if slug == "" || !validate.IsValidUuid(slug) {
+	if slug == "" {
+		return "", "", "", "", fmt.Errorf("invalid slug in object key: %s", objectKey)
+	}
+	if err := validate.ValidateUuid(slug); err != nil {
 		return "", "", "", "", fmt.Errorf("invalid slug in object key: %s", objectKey)
 	}
 

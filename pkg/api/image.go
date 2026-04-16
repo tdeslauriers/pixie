@@ -2,13 +2,13 @@ package api
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
-
 )
 
 const (
@@ -21,6 +21,11 @@ const (
 	ImageDescriptionRegex     = `^[\w\s.,!?'"()&-]{0,255}$` // Regex for image description, allows alphanumeric, spaces, punctuation, max 255 chars
 
 	ImageMaxSize = 10 * 1024 * 1024 // Maximum size for image file, 10 MB
+)
+
+var (
+	imageTitleRegex       = regexp.MustCompile(ImageTitleRegex)
+	imageDescriptionRegex = regexp.MustCompile(ImageDescriptionRegex)
 )
 
 var AllowedFileTypes = []string{
@@ -44,7 +49,7 @@ var AllowedExtensions = []string{
 	"svg",  // SVG image format
 }
 
-func IsValidExtension(ext string) bool {
+func ValidateExtension(ext string) bool {
 	ext = strings.ToLower(strings.TrimPrefix(ext, "."))
 	for _, allowedExt := range AllowedExtensions {
 		if ext == allowedExt {
@@ -124,18 +129,18 @@ func (cmd *AddMetaDataCmd) Validate() error {
 	// validate the csrf token
 	// csrf will not always be present in cmd, so we check if it's not nil before validating
 	if cmd.Csrf != "" {
-		if !validate.IsValidUuid(cmd.Csrf) {
+		if err := validate.ValidateUuid(cmd.Csrf); err != nil {
 			return fmt.Errorf("csrf token must be a valid UUID")
 		}
 	}
 
 	// validate the title
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), ImageTitleRegex) {
+	if !imageTitleRegex.MatchString(strings.TrimSpace(cmd.Title)) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", ImageTitleMinLength, ImageTitleMaxLength)
 	}
 
 	// validate the description
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), ImageDescriptionRegex) {
+	if !imageDescriptionRegex.MatchString(strings.TrimSpace(cmd.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", ImageDescriptionMinLength, ImageDescriptionMaxLength)
 	}
 
@@ -228,14 +233,16 @@ type UpdateMetadataCmd struct {
 func (cmd *UpdateMetadataCmd) Validate() error {
 	// validate the csrf token
 	if cmd.Csrf != "" {
-		if !validate.IsValidUuid(cmd.Csrf) {
+		if err := validate.ValidateUuid(cmd.Csrf); err != nil {
 			return fmt.Errorf("csrf token must be a valid UUID")
 		}
 	}
 
 	// validate the slug
-	if cmd.Slug != "" && !validate.IsValidUuid(cmd.Slug) {
-		return fmt.Errorf("slug must be a valid UUID")
+	if cmd.Slug != "" {
+		if err := validate.ValidateUuid(cmd.Slug); err != nil {
+			return fmt.Errorf("slug must be a valid UUID")
+		}
 	}
 
 	// validate the title
@@ -243,7 +250,7 @@ func (cmd *UpdateMetadataCmd) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Title), ImageTitleRegex) {
+	if !imageTitleRegex.MatchString(strings.TrimSpace(cmd.Title)) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", ImageTitleMinLength, ImageTitleMaxLength)
 	}
 
@@ -252,7 +259,7 @@ func (cmd *UpdateMetadataCmd) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(cmd.Description), ImageDescriptionRegex) {
+	if !imageDescriptionRegex.MatchString(strings.TrimSpace(cmd.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", ImageDescriptionMinLength, ImageDescriptionMaxLength)
 	}
 
@@ -276,14 +283,14 @@ func (cmd *UpdateMetadataCmd) Validate() error {
 
 	// validate the album slugs if any are provided
 	for _, slug := range cmd.AlbumSlugs {
-		if !validate.IsValidUuid(slug) {
+		if err := validate.ValidateUuid(slug); err != nil {
 			return fmt.Errorf("invalid album slug: %s", slug)
 		}
 	}
 
 	// validate the permission slugs if any are provided
 	for _, slug := range cmd.PermissionSlugs {
-		if !validate.IsValidUuid(slug) {
+		if err := validate.ValidateUuid(slug); err != nil {
 			return fmt.Errorf("invalid permission slug: %s", slug)
 		}
 	}
@@ -320,18 +327,18 @@ func (r *ImageRecord) Validate() error {
 
 	// validate the ID
 	if r.Id != "" {
-		if !validate.IsValidUuid(r.Id) {
+		if err := validate.ValidateUuid(r.Id); err != nil {
 			return fmt.Errorf("id must be a valid UUID")
 		}
 	}
 
 	// validate the title
-	if !validate.MatchesRegex(strings.TrimSpace(r.Title), ImageTitleRegex) {
+	if !imageTitleRegex.MatchString(strings.TrimSpace(r.Title)) {
 		return fmt.Errorf("title must be alphanumeric and spaces, min %d chars, max %d chars", ImageTitleMinLength, ImageTitleMaxLength)
 	}
 
 	// validate the description
-	if !validate.MatchesRegex(strings.TrimSpace(r.Description), ImageDescriptionRegex) {
+	if !imageDescriptionRegex.MatchString(strings.TrimSpace(r.Description)) {
 		return fmt.Errorf("description must be alphanumeric, spaces, and punctuation, min %d chars, max %d chars", ImageDescriptionMinLength, ImageDescriptionMaxLength)
 	}
 
@@ -342,18 +349,18 @@ func (r *ImageRecord) Validate() error {
 			return fmt.Errorf("file name must include a valid file extension, eg, 'slug.jpg'")
 		}
 
-		if !validate.IsValidUuid(split[0]) {
+		if err := validate.ValidateUuid(split[0]); err != nil {
 			return fmt.Errorf("file name must start with a valid UUID, eg, 'xxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.jpg'")
 		}
 	}
 
 	// Validate the slug
-	if !validate.IsValidUuid(r.Slug) {
+	if err := validate.ValidateUuid(r.Slug); err != nil {
 		return fmt.Errorf("slug must be a valid UUID")
 	}
 
 	// validate the file type
-	if !IsValidFiletype(r.FileType) {
+	if !ValidateFiletype(r.FileType) {
 		return fmt.Errorf("file type must be one of: %s", strings.Join(AllowedFileTypes, ", "))
 	}
 
@@ -374,8 +381,8 @@ func (r *ImageRecord) Validate() error {
 	return nil
 }
 
-// IsValidFiletype checks if the provided file type is allowed from a list of accepted types.
-func IsValidFiletype(fileType string) bool {
+// ValidateFiletype checks if the provided file type is allowed from a list of accepted types.
+func ValidateFiletype(fileType string) bool {
 	allowed := false
 	for _, allowedType := range AllowedFileTypes {
 		if strings.TrimSpace(fileType) == allowedType {

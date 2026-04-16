@@ -66,7 +66,7 @@ func (s *patronPermissionService) GetPatronPermissions(ctx context.Context, user
 
 	// validate the username
 	// redundant check, but good practice
-	if err := validate.IsValidEmail(username); err != nil {
+	if err := validate.ValidateEmail(username); err != nil {
 		return nil, nil, err
 	}
 
@@ -108,12 +108,12 @@ func (s *patronPermissionService) GetPatronPermissions(ctx context.Context, user
 func (s *patronPermissionService) AddPermissionToPatron(patronId, permissionId string) error {
 
 	// validate patronId is a well-formed UUID
-	if !validate.IsValidUuid(patronId) {
+	if err := validate.ValidateUuid(patronId); err != nil {
 		return fmt.Errorf("invalid patron ID: %s", patronId)
 	}
 
 	// validate permissionId is a well-formed UUID
-	if !validate.IsValidUuid(permissionId) {
+	if err := validate.ValidateUuid(permissionId); err != nil {
 		return fmt.Errorf("invalid permission ID: %s", permissionId)
 	}
 
@@ -138,12 +138,12 @@ func (s *patronPermissionService) AddPermissionToPatron(patronId, permissionId s
 func (s *patronPermissionService) RemovePermissionFromPatron(patronId, permissionId string) error {
 
 	// validate patronId is a well-formed UUID
-	if !validate.IsValidUuid(patronId) {
+	if err := validate.ValidateUuid(patronId); err != nil {
 		return fmt.Errorf("invalid patron ID: %s", patronId)
 	}
 
 	// validate permissionId is a well-formed UUID
-	if !validate.IsValidUuid(permissionId) {
+	if err := validate.ValidateUuid(permissionId); err != nil {
 		return fmt.Errorf("invalid permission ID: %s", permissionId)
 	}
 

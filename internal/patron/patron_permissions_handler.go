@@ -120,7 +120,7 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 	}
 
 	// validate the username
-	if err := validate.IsValidEmail(username); err != nil {
+	if err := validate.ValidateEmail(username); err != nil {
 		log.Error("failed to validate username", "err", err.Error())
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusBadRequest,

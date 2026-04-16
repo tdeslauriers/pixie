@@ -612,7 +612,7 @@ func (p *imagePipeline) getImageRecord(slug string) (*api.ImageRecord, error) {
 
 	// validate slug
 	// redundant check, but good practice
-	if !validate.IsValidUuid(slug) {
+	if err := validate.ValidateUuid(slug); err != nil {
 		return nil, fmt.Errorf("invalid image slug: %s", slug)
 	}
 
@@ -695,7 +695,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *api.ImageRecord) error {
 		return fmt.Errorf("album title is empty")
 	}
 
-	if !validate.MatchesRegex(strings.TrimSpace(title), api.AlbumTitleRegex) {
+	if !api.ValidateAlbumTitle(title) {
 		return fmt.Errorf("invalid album title: %s", title)
 	}
 
@@ -703,7 +703,7 @@ func (p *imagePipeline) linkToAlbum(title string, img *api.ImageRecord) error {
 		return fmt.Errorf("image record is nil")
 	}
 
-	if !validate.IsValidUuid(img.Id) {
+	if err := validate.ValidateUuid(img.Id); err != nil {
 		return fmt.Errorf("invalid image Id: %s", img.Id)
 	}
 
