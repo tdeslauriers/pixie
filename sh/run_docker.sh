@@ -1,6 +1,13 @@
 #!/bin/bash
 
-docker build -t pixie .
+set -euo pipefail
+
+IMAGE_NAME="pixie:latest"
+CONTAINER_NAME="pixie-dev"
+
+docker build --pull --no-cache -t "${IMAGE_NAME}" .
+
+docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
 docker run -d --rm -p $(op read "op://world_site/pixie_service_container_dev/port"):$(op read "op://world_site/pixie_service_container_dev/port") \
     -e PIXIE_SERVICE_CLIENT_ID=$(op read "op://world_site/pixie_service_container_dev/client_id") \
@@ -28,4 +35,4 @@ docker run -d --rm -p $(op read "op://world_site/pixie_service_container_dev/por
     -e PIXIE_FIELD_LEVEL_AES_GCM_SECRET="$(op read "op://world_site/pixie_aes_gcm_secret_dev/secret")" \
     -e PIXIE_S2S_JWT_VERIFYING_KEY="$(op read "op://world_site/ran_jwt_key_pair_dev/verifying_key")" \
     -e PIXIE_USER_JWT_VERIFYING_KEY="$(op read "op://world_site/shaw_jwt_key_pair_dev/verifying_key")" \
-    pixie:latest
+    "${IMAGE_NAME}"
