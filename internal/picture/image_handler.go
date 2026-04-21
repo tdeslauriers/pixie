@@ -151,7 +151,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// get image meta data from database
-	imageData, err := h.svc.GetImageData(slug, usrPsMap)
+	imageData, err := h.svc.GetImageData(ctx, slug, usrPsMap)
 	if err != nil {
 		log.Error("failed to get image data", "err", err.Error())
 		h.svc.HandleImageServiceError(ctx, err, w)
@@ -325,7 +325,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	}
 
 	// check if the image exists -> get from database
-	existing, err := h.svc.GetImageData(slug, usrPsMap)
+	existing, err := h.svc.GetImageData(ctx, slug, usrPsMap)
 	if err != nil {
 		log.Error("failed to get existing image data", "err", err.Error())
 		h.svc.HandleImageServiceError(ctx, err, w)
@@ -518,7 +518,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 
 	// build placeholder image record waiting for the image file to be processed on
 	// generate a pre-signed PUT URL to return for browser to submit the file to object storage
-	placeholder, err := h.svc.BuildPlaceholder(cmd)
+	placeholder, err := h.svc.BuildPlaceholder(ctx, cmd)
 	if err != nil {
 		log.Error("failed to build placeholder image record", "err", err.Error())
 		h.svc.HandleImageServiceError(ctx, err, w)

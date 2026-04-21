@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -29,13 +30,13 @@ type ImagePipline interface {
 	// UploadQueue processes images submitted to the pipeline queue, parsing the webhook,
 	// reading the exif data if it exists, generating thumbnails, and moving the image to the correct
 	// directory in object storage, typically based on the image year date.
-	UploadQueue()
+	UploadQueue(ctx context.Context)
 
 	// ReprocessQueue reprocesses images in the pipeline queue, based on the ReprocessCmd instructions/criteria.
 	// It is primarily used for reprocessing images that may have failed initial processing, such as images
 	// that were uploaded without exif data and landed in staging.  It is also called in order to generate any
 	// missing image resolutions or tile resolutions that errored upon initial processing.
-	ReprocessQueue()
+	ReprocessQueue(ctx context.Context)
 }
 
 // NewImagePipeline creates a new instance of ImageProcessor, returning
@@ -87,11 +88,25 @@ type imagePipeline struct {
 // processes images submitted to the pipeline queue, parsing the webhook,
 // reading the exif data if it exists, generating thumbnails, and moving the image to the correct
 // directory in object storage, typically based on the image year date.
-func (p *imagePipeline) UploadQueue() {
+func (p *imagePipeline) UploadQueue(ctx context.Context) {
 
 	defer p.wg.Done()
 
-	for webhook := range p.uploadQueue {
+	for {
+		// block until a webhook is received, the channel is closed, or the context is cancelled
+		var webhook storage.WebhookPutObject
+		select {
+		case <-ctx.Done():
+			return
+		case w, ok := <-p.uploadQueue:
+			if !ok {
+				return
+			}
+			webhook = w
+		}
+
+		// child context with timeout for processing each image in the pipeline, to prevent hanging
+		itemCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 
 		// generate telemetry -> in this case just a trace parent for web calls
 		telemetry := &connect.Telemetry{
@@ -104,6 +119,7 @@ func (p *imagePipeline) UploadQueue() {
 		// redundant check, but good practice
 		if err := webhook.Validate(); err != nil {
 			log.Error(fmt.Sprintf("invalid webhook received in image processing pipeline: %v", err))
+			cancel()
 			continue
 		}
 
@@ -114,6 +130,7 @@ func (p *imagePipeline) UploadQueue() {
 		dir, file, ext, slug, err := ParseObjectKey(webhook.MinioKey)
 		if err != nil {
 			log.Error(fmt.Sprintf("failed to parse object key %s from webhook: %v", webhook.MinioKey, err))
+			cancel()
 			continue
 		}
 
@@ -123,7 +140,7 @@ func (p *imagePipeline) UploadQueue() {
 		// process the image (read exif, generate thumbnails, etc)
 		// move the image to the correct directory in object storage based on the image date or current year
 		// if no image date found in exif data
-		if err := p.objStore.WithObject(uploadKey, func(r storage.ReadSeekCloser) error {
+		if err := p.objStore.WithObject(itemCtx, uploadKey, func(r storage.ReadSeekCloser) error {
 
 			// read the exif data if it exists
 			// NOTE: some images may not have exif data, so checks for default/zero values are needed
@@ -210,7 +227,7 @@ func (p *imagePipeline) UploadQueue() {
 					// resize the image to the target width, maintaining aspect ratio
 					// encode to jpeg, and upload to object storage
 					resizedKey := fmt.Sprintf("%s/%s_w%d%s", filepath.Dir(img.ObjectKey), slug, width, ext)
-					if err := p.resizeAndPut(src, w, resizedKey, img.FileType); err != nil {
+					if err := p.resizeAndPut(itemCtx, src, w, resizedKey, img.FileType); err != nil {
 						ch <- fmt.Errorf("failed to upload resized resolution image %s to object storage: %v", resizedKey, err)
 					}
 
@@ -230,7 +247,7 @@ func (p *imagePipeline) UploadQueue() {
 					// resize the image to the target width, maintaining aspect ratio
 					// encode to jpeg, and upload to object storage
 					tileKey := fmt.Sprintf("%s/%s_tile_w%d%s", filepath.Dir(img.ObjectKey), slug, width, ext)
-					if err := p.resizeAndPut(src, w, tileKey, img.FileType); err != nil {
+					if err := p.resizeAndPut(itemCtx, src, w, tileKey, img.FileType); err != nil {
 						ch <- fmt.Errorf("failed to upload tile image %s to object storage: %v", tileKey, err)
 					}
 
@@ -253,7 +270,7 @@ func (p *imagePipeline) UploadQueue() {
 
 				// upload the blur/placeholder image to object storage in the same directory as the original image
 				blurKey := fmt.Sprintf("%s/%s_blur%s", filepath.Dir(img.ObjectKey), slug, ext)
-				if err := p.objStore.PutObject(blurKey, encoded, img.FileType); err != nil {
+				if err := p.objStore.PutObject(itemCtx, blurKey, encoded, img.FileType); err != nil {
 					ch <- fmt.Errorf("failed to upload blur/placeholder image %s to object storage: %v", blurKey, err)
 				}
 
@@ -265,7 +282,7 @@ func (p *imagePipeline) UploadQueue() {
 			go func(ch chan error, wg *sync.WaitGroup) {
 				defer wg.Done()
 
-				if err := p.objStore.MoveObject(uploadKey, img.ObjectKey); err != nil {
+				if err := p.objStore.MoveObject(itemCtx, uploadKey, img.ObjectKey); err != nil {
 					ch <- fmt.Errorf("failed to move uploaded object %s to new location %s in object storage: %v", webhook.MinioKey, img.ObjectKey, err)
 				}
 
@@ -303,8 +320,11 @@ func (p *imagePipeline) UploadQueue() {
 			return nil
 		}); err != nil {
 			log.Error(fmt.Sprintf("failed to process image %s: %v", uploadKey, err))
+			cancel()
 			continue
 		}
+
+		cancel() // cancel the child context to free resources
 	}
 }
 
@@ -315,11 +335,25 @@ const MaxReprocessRetries int = 5
 // It is primarily used for reprocessing images that may have failed initial processing, such as images
 // that were uploaded without exif data and landed in staging.  It is also called in order to generate any
 // missing image resolutions or tile resolutions that errored upon initial processing.
-func (p *imagePipeline) ReprocessQueue() {
+func (p *imagePipeline) ReprocessQueue(ctx context.Context) {
 
 	defer p.wg.Done()
 
-	for cmd := range p.reprocessQueue {
+	for {
+		// block until a reprocess command is received, the channel is closed, or the context is cancelled
+		var cmd ReprocessCmd
+		select {
+		case <-ctx.Done():
+			return
+		case c, ok := <-p.reprocessQueue:
+			if !ok {
+				return
+			}
+			cmd = c
+		}
+
+		// create child context with timeout for processing each image in the pipeline, to prevent hanging
+		itemCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 
 		// generate telemetry -> in this case just a trace parent for web calls
 		telemetry := &connect.Telemetry{
@@ -344,6 +378,7 @@ func (p *imagePipeline) ReprocessQueue() {
 					log.Error(fmt.Sprintf("failed to parse existing object key %s for reprocess command (attempt %d): %v", cmd.CurrentObjKey, cmd.RetryCount, err))
 					cmd.RetryCount++ // increment retry count
 					// TODO: re-queue the command for retry if under max retries
+					cancel()
 					continue
 				}
 
@@ -351,19 +386,21 @@ func (p *imagePipeline) ReprocessQueue() {
 				// this must be done first before moving/building resolutions/tiles in order
 				// to validate the object exists in the first place.
 				// if it does not exists, or fails to move, there is no point in continuing.
-				if err := p.objStore.MoveObject(cmd.CurrentObjKey, cmd.UpdatedObjKey); err != nil {
+				if err := p.objStore.MoveObject(itemCtx, cmd.CurrentObjKey, cmd.UpdatedObjKey); err != nil {
 
 					if strings.Contains(err.Error(), "does not exist in object storage") {
 						log.Error(fmt.Sprintf("%s not found in object storage for reprocess command (attempt %d)", cmd.CurrentObjKey, cmd.RetryCount),
 							"err", err.Error())
 						cmd.RetryCount++ // increment retry count
 						// TODO: re-queue the command for retry if under max retries
+						cancel()
 						continue
 					} else {
 						log.Error(fmt.Sprintf("failed to move %s to new location %s for reprocess command (attempt %d)", cmd.CurrentObjKey, cmd.UpdatedObjKey, cmd.RetryCount),
 							"err", err.Error())
 						cmd.RetryCount++ // increment retry count
 						// TODO: re-queue the command for retry if under max retries
+						cancel()
 						continue
 					}
 				}
@@ -389,7 +426,7 @@ func (p *imagePipeline) ReprocessQueue() {
 						updatedResKey := fmt.Sprintf("%s/%s_w%d%s", filepath.Dir(cmd.UpdatedObjKey), slug, width, ext)
 
 						// the object should already exist, try to move it
-						if err := p.objStore.MoveObject(existingResKey, updatedResKey); err != nil {
+						if err := p.objStore.MoveObject(itemCtx, existingResKey, updatedResKey); err != nil {
 
 							// if it does not exist, need to build it
 							if strings.Contains(err.Error(), "does not exist in object storage") {
@@ -397,7 +434,7 @@ func (p *imagePipeline) ReprocessQueue() {
 								log.Warn(fmt.Sprintf("resolution image %s not found in object storage, (re)building for reprocess command (attempt %d)", existingResKey, c.RetryCount))
 
 								// stream + create resolution the original image from object storage
-								if err := p.objStore.WithObject(c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
+								if err := p.objStore.WithObject(itemCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
 
 									// decode the image
 									src, _, err := image.Decode(r)
@@ -407,7 +444,7 @@ func (p *imagePipeline) ReprocessQueue() {
 
 									// resize the image to the target width, maintaining aspect ratio,
 									// encode to jpeg, and upload to object storage
-									if err := p.resizeAndPut(src, w, updatedResKey, c.FileType); err != nil {
+									if err := p.resizeAndPut(itemCtx, src, w, updatedResKey, c.FileType); err != nil {
 										return fmt.Errorf("failed to upload resized resolution image %s to object storage for reprocess command (attempt %d): %v", updatedResKey, c.RetryCount, err)
 									}
 
@@ -441,7 +478,7 @@ func (p *imagePipeline) ReprocessQueue() {
 						updatedTileKey := fmt.Sprintf("%s/%s_tile_w%d%s", filepath.Dir(c.UpdatedObjKey), slug, width, ext)
 
 						// the object should already exist, try to move it
-						if err := p.objStore.MoveObject(existingTileKey, updatedTileKey); err != nil {
+						if err := p.objStore.MoveObject(itemCtx, existingTileKey, updatedTileKey); err != nil {
 
 							// if it does not exist, need to build it
 							if strings.Contains(err.Error(), "does not exist in object storage") {
@@ -449,7 +486,7 @@ func (p *imagePipeline) ReprocessQueue() {
 								log.Warn(fmt.Sprintf("tile image %s not found in object storage, (re)building for reprocess command (attempt %d)", existingTileKey, c.RetryCount))
 
 								// stream + create tile the original image from object storage
-								if err := p.objStore.WithObject(c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
+								if err := p.objStore.WithObject(itemCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
 
 									// decode the image
 									src, _, err := image.Decode(r)
@@ -459,7 +496,7 @@ func (p *imagePipeline) ReprocessQueue() {
 
 									// resize the image to the target width, maintaining aspect ratio,
 									// encode to jpeg, and upload to object storage
-									if err := p.resizeAndPut(src, width, updatedTileKey, c.FileType); err != nil {
+									if err := p.resizeAndPut(itemCtx, src, width, updatedTileKey, c.FileType); err != nil {
 										return fmt.Errorf("failed to upload resized tile image %s to object storage for reprocess command (attempt %d): %v", updatedTileKey, c.RetryCount, err)
 									}
 
@@ -490,7 +527,7 @@ func (p *imagePipeline) ReprocessQueue() {
 					updatedBlurKey := fmt.Sprintf("%s/%s_blur%s", filepath.Dir(c.UpdatedObjKey), slug, ext)
 
 					// the object should already exist, try to move it
-					if err := p.objStore.MoveObject(existingBlurKey, updatedBlurKey); err != nil {
+					if err := p.objStore.MoveObject(itemCtx, existingBlurKey, updatedBlurKey); err != nil {
 
 						// if it does not exist, need to build it
 						if strings.Contains(err.Error(), "does not exist in object storage") {
@@ -498,7 +535,7 @@ func (p *imagePipeline) ReprocessQueue() {
 							log.Warn(fmt.Sprintf("blur/placeholder image %s not found in object storage, (re)building for reprocess command (attempt %d)", existingBlurKey, c.RetryCount))
 
 							// stream + create blur/placeholder the original image from object storage
-							if err := p.objStore.WithObject(c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
+							if err := p.objStore.WithObject(itemCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
 
 								// decode the image
 								src, _, err := image.Decode(r)
@@ -514,7 +551,7 @@ func (p *imagePipeline) ReprocessQueue() {
 								}
 
 								// upload the blur/placeholder image to object storage in the same directory as the original image
-								if err := p.objStore.PutObject(updatedBlurKey, encoded, c.FileType); err != nil {
+								if err := p.objStore.PutObject(itemCtx, updatedBlurKey, encoded, c.FileType); err != nil {
 									return fmt.Errorf("failed to upload blur/placeholder image %s to object storage for reprocess command (attempt %d): %v", updatedBlurKey, c.RetryCount, err)
 								}
 
@@ -546,6 +583,7 @@ func (p *imagePipeline) ReprocessQueue() {
 					log.Error(fmt.Sprintf("one or more errors occurred during reprocessing image with slug %s for reprocess command (attempt %d): %v", cmd.Slug, cmd.RetryCount, errors.Join(errs...)))
 					cmd.RetryCount++ // increment retry count
 					// TODO: re-queue the command for retry if under max retries
+					cancel()
 					continue
 				}
 
@@ -559,6 +597,7 @@ func (p *imagePipeline) ReprocessQueue() {
 					log.Error(fmt.Sprintf("failed to parse updated object key %s for reprocess command (attempt %d): %v", cmd.UpdatedObjKey, cmd.RetryCount, err))
 					cmd.RetryCount++ // increment retry count
 					// TODO: re-queue the command for retry if under max retries
+					cancel()
 					continue
 				}
 
@@ -569,6 +608,7 @@ func (p *imagePipeline) ReprocessQueue() {
 					log.Error(fmt.Sprintf("directory %s parsed from updated object key %s is not a valid year for reprocess command (attempt %d): %v", year, cmd.UpdatedObjKey, cmd.RetryCount, err))
 					cmd.RetryCount++ // increment retry count
 					// TODO: re-queue the command for retry if under max retries
+					cancel()
 					continue
 				}
 
@@ -577,19 +617,22 @@ func (p *imagePipeline) ReprocessQueue() {
 					log.Error(fmt.Sprintf("failed to create album xref for year %s for image with id %s for reprocess command (attempt %d): %v", year, cmd.Id, cmd.RetryCount, err))
 					cmd.RetryCount++ // increment retry count
 					// TODO: re-queue the command for retry if under max retries
+					cancel()
 					continue
 				}
 			}
 		} else {
 			log.Error(fmt.Sprintf("max retries reached for reprocess command for image with slug %s, skipping further attempts", cmd.Slug))
 		}
+
+		cancel() // cancel the child context to free resources
 	}
 }
 
 // putResizedImage is a helper which resizes the provided image to the target width,
 // encodes it to jpeg, and uploads it to object storage at the specified key.
 // Exists to abstract away this logic from the main processing loop.
-func (p *imagePipeline) resizeAndPut(src image.Image, targetWidth int, objKey string, fileType string) error {
+func (p *imagePipeline) resizeAndPut(ctx context.Context, src image.Image, targetWidth int, objKey string, fileType string) error {
 
 	// resize the image to the target width, maintaining aspect ratio
 	resized := resizeImageToWidth(src, targetWidth)
@@ -599,7 +642,7 @@ func (p *imagePipeline) resizeAndPut(src image.Image, targetWidth int, objKey st
 	}
 
 	// upload the resized image to object storage at the specified key
-	if err := p.objStore.PutObject(objKey, encoded, fileType); err != nil {
+	if err := p.objStore.PutObject(ctx, objKey, encoded, fileType); err != nil {
 		return fmt.Errorf("failed to upload resized image %s to object storage: %v", objKey, err)
 	}
 

@@ -48,8 +48,8 @@ github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd h1:CmH9+J6ZSsIjUK
 github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd/go.mod h1:hPqNNc0+uJM6H+SuU8sEs5K5IQeKccPqeSjfgcKGgPk=
 github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
-github.com/tdeslauriers/carapace v0.4.0 h1:wqMH6+VLg7HNVXXgvoYywwRoTsKXJVZOnr46X2hkgMc=
-github.com/tdeslauriers/carapace v0.4.0/go.mod h1:POP1x+ktyMrZye396aId6f88NdbqJmNnJZp6pZNEMww=
+github.com/tdeslauriers/carapace v0.4.1 h1:CvCHDr0W/8/qFyIuuz0cXHnn1cd8HdGbcOIBuik5DRk=
+github.com/tdeslauriers/carapace v0.4.1/go.mod h1:POP1x+ktyMrZye396aId6f88NdbqJmNnJZp6pZNEMww=
 github.com/tinylib/msgp v1.6.2 h1:D40LN895O9HJpN8n5Ksqk+abl7zw6RtizDwgRCE7hXk=
 github.com/tinylib/msgp v1.6.2/go.mod h1:RSp0LW9oSxFut3KzESt5Voq4GVWyS+PSulT77roAqEA=
 go.yaml.in/yaml/v3 v3.0.4 h1:tfq32ie2Jv2UxXFdLJdh3jXuOzWiL1fo0bu/FbuKpbc=

@@ -28,7 +28,7 @@ type ImageService interface {
 
 	// GetImageData retrieves image data from the database (based on the user's permissions) and
 	// fetches signed URL for the image.
-	GetImageData(slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error)
+	GetImageData(ctx context.Context, slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error)
 
 	// UpdateImageData updates an existing image record in the database.
 	UpdateImageData(ctx context.Context, existing *api.ImageData, updated *api.ImageRecord) error
@@ -37,7 +37,7 @@ type ImageService interface {
 	// eg, the id, slug, title, and description provided by the user.
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
-	BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholder, error)
+	BuildPlaceholder(ctx context.Context, cmd api.AddMetaDataCmd) (*api.Placeholder, error)
 }
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -77,7 +77,7 @@ type imageService struct {
 // GetImageData is the concrete implementation of the interface method which
 // retrieves image data from the database (based on the user's permissions) and
 // fetches signed URL for the image.
-func (s *imageService) GetImageData(slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error) {
+func (s *imageService) GetImageData(ctx context.Context, slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error) {
 
 	// validate the slug
 	// redundant check, but good practice
@@ -158,7 +158,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]exo.Permissio
 
 	// get the highest resolution signed URL
 	wg.Add(1)
-	go s.getObjectUrl(record.ObjectKey, record.Width, urlsCh, errCh, &wg)
+	go s.getObjectUrl(ctx, record.ObjectKey, record.Width, urlsCh, errCh, &wg)
 
 	// get signed URLs for each resolution width
 	for _, width := range util.ResolutionWidthsImages {
@@ -166,7 +166,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]exo.Permissio
 		resizedKey := fmt.Sprintf("%s/%s_w%d%s", dir, slug, width, ext)
 
 		wg.Add(1)
-		go s.getObjectUrl(resizedKey, width, urlsCh, errCh, &wg)
+		go s.getObjectUrl(ctx, resizedKey, width, urlsCh, errCh, &wg)
 	}
 
 	// get the signed URL for the blur placeholder image
@@ -176,7 +176,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]exo.Permissio
 
 		blurKey := fmt.Sprintf("%s/%s_blur%s", dir, slug, ext)
 
-		url, err := s.store.GetSignedUrl(blurKey)
+		url, err := s.store.GetSignedUrl(ctx, blurKey)
 		if err != nil {
 			errCh <- fmt.Errorf("failed to get signed URL for blur object key '%s': %v", blurKey, err)
 			return
@@ -243,7 +243,7 @@ func (s *imageService) GetImageData(slug string, userPs map[string]exo.Permissio
 // BuildPlaceholder is the concrete implementation of the interface method which
 // builds the metadata for a placeholder image from an add image cmd.
 // The image processing pipeline will build the rest of the record upon ingestion of the image file.
-func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholder, error) {
+func (s *imageService) BuildPlaceholder(ctx context.Context, cmd api.AddMetaDataCmd) (*api.Placeholder, error) {
 
 	// validate the created metadata
 	// should be a redundant check, but good practice
@@ -320,7 +320,7 @@ func (s *imageService) BuildPlaceholder(cmd api.AddMetaDataCmd) (*api.Placeholde
 	}
 
 	// generate a presigned put URL for the image file in object storage
-	putUrl, err := s.store.GetPreSignedPutUrl(record.ObjectKey)
+	putUrl, err := s.store.GetPreSignedPutUrl(ctx, record.ObjectKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get presigned put URL for image object key '%s': %v", record.ObjectKey, err)
 	}
@@ -431,11 +431,11 @@ func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageD
 
 // getObjectUrl is a helper method which generates a signed URL for the provided object key
 // from the object storage service and returns the URL as a string.
-func (s *imageService) getObjectUrl(key string, width int, urlCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
+func (s *imageService) getObjectUrl(ctx context.Context, key string, width int, urlCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	url, err := s.store.GetSignedUrl(key)
+	url, err := s.store.GetSignedUrl(ctx, key)
 	if err != nil {
 		errCh <- fmt.Errorf("failed to get signed URL for object key '%s': %v", key, err)
 		return

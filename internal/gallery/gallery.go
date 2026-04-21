@@ -1,6 +1,7 @@
 package gallery
 
 import (
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
@@ -33,7 +34,7 @@ import (
 type Gallery interface {
 
 	// Run runs the gallery service
-	Run() error
+	Run(ctx context.Context) error
 
 	// CloseDb closes the database connection
 	CloseDb() error
@@ -231,7 +232,7 @@ func (g *gallery) CloseDb() error {
 }
 
 // Run runs the gallery service.
-func (g *gallery) Run() error {
+func (g *gallery) Run(ctx context.Context) error {
 
 	// image processing pipeline queue
 	imgPipeline := pipeline.NewImagePipeline(
@@ -244,8 +245,8 @@ func (g *gallery) Run() error {
 		g.objectStorage)
 
 	g.wg.Add(2)
-	go imgPipeline.UploadQueue()
-	go imgPipeline.ReprocessQueue()
+	go imgPipeline.UploadQueue(ctx)
+	go imgPipeline.ReprocessQueue(ctx)
 
 	// register handlers
 	mux := http.NewServeMux()

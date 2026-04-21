@@ -398,7 +398,7 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 				resizedKey := fmt.Sprintf("%s/%s_tile_w%d%s", dir, slug, width, ext)
 
 				targetsWg.Add(1)
-				go s.getObjectUrl(resizedKey, width, targetsCh, targetsErrCh, &targetsWg)
+				go s.getObjectUrl(ctx, resizedKey, width, targetsCh, targetsErrCh, &targetsWg)
 			}
 
 			// get the signed URL for the blur placeholder image
@@ -408,7 +408,7 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 
 				blurKey := fmt.Sprintf("%s/%s_blur%s", dir, slug, ext)
 
-				url, err := s.store.GetSignedUrl(blurKey)
+				url, err := s.store.GetSignedUrl(ctx, blurKey)
 				if err != nil {
 					log.Error(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", blurKey, err))
 					return
@@ -613,11 +613,11 @@ func (s *albumService) InsertAlbumImageXref(albumId, imageId string) error {
 
 // getObjectUrl is a helper method which generates a signed URL for the provided object key
 // from the object storage service and returns the URL as a string.
-func (s *albumService) getObjectUrl(key string, width int, targetCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
+func (s *albumService) getObjectUrl(ctx context.Context, key string, width int, targetCh chan api.ImageTarget, errCh chan error, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	url, err := s.store.GetSignedUrl(key)
+	url, err := s.store.GetSignedUrl(ctx, key)
 	if err != nil {
 		errCh <- fmt.Errorf("failed to get signed URL for object key '%s': %v", key, err)
 		return

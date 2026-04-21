@@ -193,7 +193,7 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 				tileKey := fmt.Sprintf("%s/%s_tile_w%d%s", dir, ir.Slug, width, ext)
 
 				tileWg.Add(1)
-				go s.getStagedObjectUrl(tileKey, width, tileCh, &tileWg)
+				go s.getStagedObjectUrl(ctx, tileKey, width, tileCh, &tileWg)
 			}
 
 			// get the blur key signed URL
@@ -202,7 +202,7 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 			go func(key string, ch chan<- string, wg *sync.WaitGroup) {
 				defer wg.Done()
 
-				url, err := s.objStore.GetSignedUrl(key)
+				url, err := s.objStore.GetSignedUrl(ctx, key)
 				if err != nil {
 					log.Warn(fmt.Sprintf("failed to get signed URL for blur object key '%s': %v", key, err))
 					return
@@ -265,12 +265,12 @@ func (s *stagedImageService) GetStagedImages(ctx context.Context) (*api.Album, e
 // NOTE: it is possible the resolution does not exists since we dont know when the pipeline
 // errored and tossed the image in staged.
 // As such, we just log missing things.
-func (s *stagedImageService) getStagedObjectUrl(key string, width int, imgCh chan api.ImageTarget, wg *sync.WaitGroup) {
+func (s *stagedImageService) getStagedObjectUrl(ctx context.Context, key string, width int, imgCh chan api.ImageTarget, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
 	// very possible a url cannot be generated for a missing object
-	url, err := s.objStore.GetSignedUrl(key)
+	url, err := s.objStore.GetSignedUrl(ctx, key)
 	if err != nil {
 		s.logger.Warn(fmt.Sprintf("failed to get signed URL for object key '%s': %v", key, err))
 		return

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/tdeslauriers/carapace/pkg/config"
 	"github.com/tdeslauriers/pixie/internal/gallery"
@@ -53,10 +56,14 @@ func main() {
 
 	defer gallery.CloseDb()
 
-	if err := gallery.Run(); err != nil {
+	// create a context that is cancelled when a shutdown signal is received
+	// signal.NotifyContext cancels ctx on SIGINT (ctrl+c) or SIGTERM (kubernetes/docker stop)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Run blocks until the pipeline goroutines exit (which happens when ctx is cancelled)
+	if err := gallery.Run(ctx); err != nil {
 		logger.Error(fmt.Sprintf("failed to run %s gallery service", util.ServiceGallery), "err", err.Error())
 		os.Exit(1)
 	}
-
-	select {} // block forever
 }
