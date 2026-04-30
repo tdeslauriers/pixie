@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/tdeslauriers/carapace v0.4.1
+	github.com/tdeslauriers/carapace v0.4.4
 )
 
 require (

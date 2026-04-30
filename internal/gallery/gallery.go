@@ -124,7 +124,10 @@ func New(config *config.Config) (Gallery, error) {
 		return nil, fmt.Errorf("failed to decode hmac secret: %v", err)
 	}
 
-	indexer := data.NewIndexer(hmacSecret)
+	indexer, err := data.NewIndexer(hmacSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create indexer: %v", err)
+	}
 
 	// field level encryption
 	aes, err := base64.StdEncoding.DecodeString(config.Database.FieldSecret)
@@ -132,7 +135,10 @@ func New(config *config.Config) (Gallery, error) {
 		return nil, fmt.Errorf("failed to decode field level encryption secret: %v", err)
 	}
 
-	cryptor := data.NewServiceAesGcmKey(aes)
+	cryptor, err := data.NewServiceAesGcmKey(aes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create field level encryption cryptor: %v", err)
+	}
 
 	// s2s jwt verifing key
 	s2sPublicKey, err := sign.ParsePublicEcdsaCert(config.Jwt.S2sVerifyingKey)
