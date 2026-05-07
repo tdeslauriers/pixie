@@ -2,7 +2,6 @@ package patron
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,12 +40,18 @@ type Service interface {
 }
 
 // NewService creates a new Patron service instance, returning a pointer to the concrete implementation.
-func NewService(sql *sql.DB, i data.Indexer, c data.Cryptor) Service {
+func NewService(
+	sql PatronRepository,
+	i data.Indexer,
+	c data.Cryptor,
+	ps permission.Service,
+) Service {
+
 	return &patronService{
-		db:          NewPatronRepository(sql),
+		db:          sql,
 		indexer:     i,
 		cryptor:     c,
-		permissions: permission.NewService(sql, i, c),
+		permissions: ps,
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePatron)).

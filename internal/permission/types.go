@@ -1,11 +1,15 @@
 package permission
 
 import (
-	"database/sql"
-
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
+	"github.com/tdeslauriers/pixie/internal/util"
 )
+
+// services allowed to be associated with permissions in this app, ie, only the gallery service.
+var AllowedServices = map[string]struct{}{
+	util.ServiceGallery: {},
+}
 
 // PermissionsService is a service aggregation interface for all services managing permissions.
 type Service interface {
@@ -15,11 +19,16 @@ type Service interface {
 }
 
 // NewService creates a new service instance, returning a pointer to the concrete implementation.
-func NewService(sql *sql.DB, i data.Indexer, c data.Cryptor) Service {
+func NewService(
+	ps permissions.Service,
+	pps PatronPermissionService,
+	ips ImagePermissionService,
+) Service {
+
 	return &service{
-		Service:                 permissions.NewService(sql, i, c),
-		PatronPermissionService: NewPatronPermissionService(sql, i, c),
-		ImagePermissionService:  NewImagePermissionService(sql, i, c),
+		Service:                 ps,
+		PatronPermissionService: pps,
+		ImagePermissionService:  ips,
 	}
 }
 

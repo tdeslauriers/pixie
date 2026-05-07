@@ -18,6 +18,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/diagnostics"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/carapace/pkg/pat"
+	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/session/provider"
 	"github.com/tdeslauriers/carapace/pkg/sign"
 	"github.com/tdeslauriers/carapace/pkg/storage"
@@ -118,6 +119,9 @@ func New(config *config.Config) (Gallery, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
+	// patron repository
+	patronRepository := patron.NewPatronRepository(db)
+
 	// indexer
 	hmacSecret, err := base64.StdEncoding.DecodeString(config.Database.IndexSecret)
 	if err != nil {
@@ -170,6 +174,12 @@ func New(config *config.Config) (Gallery, error) {
 
 	tokenProvider := provider.NewS2sTokenProvider(s2s, s2sCreds, db, cryptor)
 
+	// permissions service
+	exoPermissionService := exo.NewService(db, indexer, cryptor, permission.AllowedServices)
+	patronPermissionService := permission.NewPatronPermissionService(db, indexer, cryptor)
+	imagePermissionService := permission.NewImagePermissionService(db, indexer, cryptor)
+	permissionService := permission.NewService(exoPermissionService, patronPermissionService, imagePermissionService)
+
 	// create reprocess queue
 	reprocessQueue := make(chan pipeline.ReprocessCmd, 100)
 
@@ -188,8 +198,8 @@ func New(config *config.Config) (Gallery, error) {
 		pictures:         picture.NewService(db, indexer, cryptor, objStore, reprocessQueue),
 		albums:           album.NewService(db, indexer, cryptor, objStore),
 		staged:           album.NewStagedImageService(db, indexer, cryptor, objStore),
-		patrons:          patron.NewService(db, indexer, cryptor),
-		permissions:      permission.NewService(db, indexer, cryptor),
+		patrons:          patron.NewService(patronRepository, indexer, cryptor, permissionService),
+		permissions:      permissionService,
 
 		uploadQueue:    make(chan storage.WebhookPutObject, 100),
 		reprocessQueue: reprocessQueue,
