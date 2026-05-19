@@ -115,7 +115,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	accessToken := r.Header.Get("Authorization")
@@ -125,7 +125,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// get slug from request
 	slug, err := connect.GetValidSlug(r)
@@ -266,7 +266,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	accessToken := r.Header.Get("Authorization")
@@ -276,7 +276,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// get slug from request path
 	slug, err := connect.GetValidSlug(r)
@@ -482,7 +482,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	accessToken := r.Header.Get("Authorization")
@@ -492,7 +492,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// decode the request body into the AddMetaDataCmd struct
 	var cmd api.AddMetaDataCmd

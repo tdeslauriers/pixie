@@ -81,7 +81,7 @@ func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.R
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// pat validation call to s2s service
 	pat := r.Header.Get("Authorization")
@@ -102,7 +102,7 @@ func (h *handler) HandleImageUploadNotification(w http.ResponseWriter, r *http.R
 		e.SendJsonErr(w)
 		return
 	}
-	log = log.With("actor", authedPat.ServiceName)
+	log = log.With("actor_user", authedPat.ServiceName)
 
 	// decode the request body
 	var webhook storage.WebhookPutObject

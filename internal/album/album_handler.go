@@ -128,7 +128,7 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
@@ -138,7 +138,7 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// get the user's permissions
 	ps, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
@@ -197,7 +197,7 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
@@ -207,7 +207,7 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// extract the slug from the request URL
 	slug, err := connect.GetValidSlug(r)
@@ -306,7 +306,7 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
@@ -317,7 +317,7 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// this is admin endpoint, so add actor to logger
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// do not need to extract slug since it is always "staged"
 
@@ -396,7 +396,7 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
@@ -406,7 +406,7 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// extract the slug from the request URL
 	slug, err := connect.GetValidSlug(r)
@@ -536,7 +536,7 @@ func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request)
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("requesting_service", authedSvc.Claims.Subject)
+	log = log.With("actor_service", authedSvc.Claims.Subject)
 
 	// validate iam token
 	iamToken := r.Header.Get("Authorization")
@@ -546,7 +546,7 @@ func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request)
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor", authedUser.Claims.Subject)
+	log = log.With("actor_user", authedUser.Claims.Subject)
 
 	// decode the request body into an cmd record
 	var cmd api.AddAlbumCmd
