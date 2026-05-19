@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/pixie/internal/util"
@@ -78,7 +79,7 @@ func (h *permissionsHandler) HandlePermissions(w http.ResponseWriter, r *http.Re
 	default:
 		// Handle unsupported methods
 		// get telemetry from request
-		tel := connect.ObtainTelemetry(r, h.logger)
+		tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 		log := h.logger.With(tel.TelemetryFields()...)
 
 		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
@@ -95,7 +96,7 @@ func (h *permissionsHandler) HandlePermissions(w http.ResponseWriter, r *http.Re
 func (h *permissionsHandler) getAllPermissions(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// validate the service token
@@ -151,7 +152,7 @@ func (h *permissionsHandler) getAllPermissions(w http.ResponseWriter, r *http.Re
 func (h *permissionsHandler) getPermissionBySlug(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// validate the service token
@@ -217,7 +218,7 @@ func (h *permissionsHandler) getPermissionBySlug(w http.ResponseWriter, r *http.
 func (h *permissionsHandler) createPermission(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// validate the service token
@@ -314,7 +315,7 @@ func (h *permissionsHandler) createPermission(w http.ResponseWriter, r *http.Req
 func (h *permissionsHandler) updatePermission(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// validate the service token

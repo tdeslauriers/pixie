@@ -114,11 +114,13 @@ func New(config *config.Config) (Gallery, error) {
 		Password: config.Database.Password,
 	}
 
+	// instantiate db connection
 	db, err := data.NewSqlDbConnector(dbUrl, dbClientConfig).Connect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
+	// repositories
 	// patron repository
 	patronRepository := patron.NewPatronRepository(db)
 
@@ -315,19 +317,17 @@ func (g *gallery) Run(ctx context.Context) error {
 	)
 	mux.HandleFunc("/permissions/{slug...}", perm.HandlePermissions)
 
-	galleryServer := &connect.TlsServer{
-		Addr:      g.config.ServicePort,
-		Mux:       mux,
-		TlsConfig: g.serverTls,
+	galleryServer := connect.NewTlsServer(
+		g.config.ServicePort,
+		mux,
+		g.serverTls,
+	)
+
+	g.logger.Info(fmt.Sprintf("starting %s gallery service on port %s", g.config.ServiceName, g.config.ServicePort[1:]))
+	if err := galleryServer.Initialize(ctx); err != nil && err != http.ErrServerClosed {
+		g.logger.Error(fmt.Sprintf("failed to start %s gallery service: %v", g.config.ServiceName, err))
+		return err
 	}
-
-	go func() {
-
-		g.logger.Info(fmt.Sprintf("starting %s gallery service on port %s", g.config.ServiceName, galleryServer.Addr[1:]))
-		if err := galleryServer.Initialize(); err != http.ErrServerClosed {
-			g.logger.Error(fmt.Sprintf("failed to start %s gallery service: %v", g.config.ServiceName, err))
-		}
-	}()
 
 	// close the queues first to handle graceful shutdown.
 	g.wg.Wait()

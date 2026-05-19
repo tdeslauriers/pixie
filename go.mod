@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/tdeslauriers/carapace v0.4.8
+	github.com/tdeslauriers/carapace v0.4.13
 )
 
 require (
@@ -16,6 +16,9 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
+	google.golang.org/grpc v1.78.0 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
 )
 
 require (

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/storage"
@@ -354,7 +354,7 @@ func (s *imageService) UpdateImageData(ctx context.Context, existing *api.ImageD
 	// create function scoped logger
 	// add telemetry fields from context if exists
 	log := s.logger
-	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+	if tel, ok := ctx.Value(telemetry.TelemetryKey).(*telemetry.Telemetry); ok && tel != nil {
 		log = log.With(tel.TelemetryFields()...)
 	} else {
 		log.Warn("no telemetry found in context for buildImageData")

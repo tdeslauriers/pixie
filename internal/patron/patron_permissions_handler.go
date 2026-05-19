@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -65,7 +66,7 @@ func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Req
 		return
 	default:
 		// get telemetry from request
-		tel := connect.ObtainTelemetry(r, h.logger)
+		tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 		log := h.logger.With(tel.TelemetryFields()...)
 
 		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
@@ -82,11 +83,11 @@ func (h *permissionHandler) HandlePermissions(w http.ResponseWriter, r *http.Req
 func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// validate the s2s token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -159,11 +160,11 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// validate the s2s token
 	s2sToken := r.Header.Get("Service-Authorization")

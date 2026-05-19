@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -58,7 +58,7 @@ func (s *patronPermissionService) GetPatronPermissions(ctx context.Context, user
 	// create local logger
 	// get telemetry fields from context if exists
 	log := s.logger
-	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+	if tel, ok := ctx.Value(telemetry.TelemetryKey).(*telemetry.Telemetry); ok && tel != nil {
 		log = log.With(tel.TelemetryFields()...)
 	} else {
 		log.Warn("no telemetry found in context for GetPatronPermissions")

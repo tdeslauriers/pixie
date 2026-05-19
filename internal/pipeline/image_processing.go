@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -109,8 +109,8 @@ func (p *imagePipeline) UploadQueue(ctx context.Context) {
 		itemCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 
 		// generate telemetry -> in this case just a trace parent for web calls
-		telemetry := &connect.Telemetry{
-			Traceparent: *connect.GenerateTraceParent(),
+		telemetry := &telemetry.Telemetry{
+			Traceparent: *telemetry.NewTraceparent(),
 		}
 
 		log := p.logger.With(telemetry.TelemetryFields()...)
@@ -356,8 +356,8 @@ func (p *imagePipeline) ReprocessQueue(ctx context.Context) {
 		itemCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 
 		// generate telemetry -> in this case just a trace parent for web calls
-		telemetry := &connect.Telemetry{
-			Traceparent: *connect.GenerateTraceParent(),
+		telemetry := &telemetry.Telemetry{
+			Traceparent: *telemetry.NewTraceparent(),
 		}
 		log := p.logger.With(telemetry.TelemetryFields()...)
 

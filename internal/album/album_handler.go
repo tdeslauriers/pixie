@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/permission"
@@ -96,7 +97,7 @@ func (h *albumHandler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Handle unsupported methods
 		// get telemetry from request
-		tel := connect.ObtainTelemetry(r, h.logger)
+		tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 		log := h.logger.With(tel.TelemetryFields()...)
 
 		log.Error(fmt.Sprintf("unsupported method %s for endpoint %s", r.Method, r.URL.Path))
@@ -113,11 +114,11 @@ func (h *albumHandler) HandleAlbums(w http.ResponseWriter, r *http.Request) {
 func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -182,11 +183,11 @@ func (h *albumHandler) handleGetAlbums(w http.ResponseWriter, r *http.Request) {
 func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -290,11 +291,11 @@ func (h *albumHandler) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// Note: this endpoint is read only, so only read permissions are required
 	// validate service token
@@ -381,11 +382,11 @@ func (h *albumHandler) handleGetStagedImages(w http.ResponseWriter, r *http.Requ
 func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// validate service token
 	s2sToken := r.Header.Get("Service-Authorization")
@@ -524,7 +525,7 @@ func (h *albumHandler) handleUpdateAlbum(w http.ResponseWriter, r *http.Request)
 func (h *albumHandler) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// validate service token

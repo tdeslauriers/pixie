@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/jwt"
 	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/api"
@@ -53,11 +54,11 @@ type patronRegisterHandler struct {
 func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
-	tel := connect.ObtainTelemetry(r, h.logger)
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
 	log := h.logger.With(tel.TelemetryFields()...)
 
 	// add telemetry to context for downstream calls + service functions
-	ctx := context.WithValue(r.Context(), connect.TelemetryKey, tel)
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
 	// check the request is a POST request
 	if r.Method != http.MethodPost {

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tdeslauriers/carapace/pkg/connect"
+	"github.com/tdeslauriers/carapace/pkg/connect/telemetry"
 	"github.com/tdeslauriers/carapace/pkg/data"
 	exo "github.com/tdeslauriers/carapace/pkg/permissions"
 	"github.com/tdeslauriers/carapace/pkg/validate"
@@ -129,7 +129,7 @@ func (s *imagePermissionService) GetImagePermissions(imageId string) (map[string
 func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, imageId string, permissionSlugs []string) error {
 
 	log := s.logger
-	if tel, ok := connect.GetTelemetryFromContext(ctx); ok && tel != nil {
+	if tel, ok := ctx.Value(telemetry.TelemetryKey).(*telemetry.Telemetry); ok && tel != nil {
 		log = s.logger.With(tel.TelemetryFields()...)
 	} else {
 		log.Warn("no telemetry found in context for UpdateImagePermissions")
