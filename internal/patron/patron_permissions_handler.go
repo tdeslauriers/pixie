@@ -97,7 +97,7 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("actor_service", authedSvc.Claims.Subject)
+	log = log.With("principal_service", authedSvc.Claims.Subject)
 
 	// validate the iam token
 	iamToken := r.Header.Get("Authorization")
@@ -107,7 +107,7 @@ func (h *permissionHandler) getPatronPermissions(w http.ResponseWriter, r *http.
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor_user", authedUser.Claims.Subject)
+	log = log.With("principal_user", authedUser.Claims.Subject)
 
 	username := r.URL.Query().Get("username")
 	if username == "" {
@@ -174,7 +174,7 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("actor_service", authedSvc.Claims.Subject)
+	log = log.With("principal_service", authedSvc.Claims.Subject)
 
 	// validate the iam token
 	iamToken := r.Header.Get("Authorization")
@@ -184,7 +184,7 @@ func (h *permissionHandler) updatePatronPermissions(w http.ResponseWriter, r *ht
 		connect.RespondAuthFailure(connect.User, err, w)
 		return
 	}
-	log = log.With("actor_user", authedUser.Claims.Subject)
+	log = log.With("principal_user", authedUser.Claims.Subject)
 
 	// get the request body
 	var cmd permissions.UpdatePermissionsCmd

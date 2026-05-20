@@ -78,7 +78,7 @@ func (h *patronRegisterHandler) HandleRegister(w http.ResponseWriter, r *http.Re
 		connect.RespondAuthFailure(connect.S2s, err, w)
 		return
 	}
-	log = log.With("actor_service", authedSvc.Claims.Subject)
+	log = log.With("principal_service", authedSvc.Claims.Subject)
 
 	// get the patron registration command from the request body
 	var cmd api.PatronRegisterCmd
