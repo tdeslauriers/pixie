@@ -381,7 +381,23 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		IsPublished: cmd.IsPublished,
 	}
 
-	// is update necessary?
+	// TODO: add concurrency here if needed
+	// Note these check if necessary before firing, need to go before the image update check
+	// update albums associated with the image
+	if err := h.svc.UpdateAlbumImages(ctx, existing.Id, cmd.AlbumSlugs); err != nil {
+		log.Error(fmt.Sprintf("/images/slug handler failed to update image albums: %v", err))
+		h.svc.HandleImageServiceError(ctx, err, w)
+		return
+	}
+
+	// update permissions associated with the image
+	if err := h.perms.UpdateImagePermissions(ctx, existing.Id, cmd.PermissionSlugs); err != nil {
+		log.Error(fmt.Sprintf("/images/slug handler failed to update image permissions: %v", err))
+		h.svc.HandleImageServiceError(ctx, err, w)
+		return
+	}
+
+	// is update  to image data necessary?
 	if existing.Title == updated.Title &&
 		existing.Description == updated.Description &&
 		existing.ImageDate == updated.ImageDate &&
@@ -395,21 +411,6 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	// handles updating the database and the object store if necessary
 	if err := h.svc.UpdateImageData(ctx, existing, updated); err != nil {
 		log.Error(fmt.Sprintf("/images/slug handler failed to update image data: %v", err))
-		h.svc.HandleImageServiceError(ctx, err, w)
-		return
-	}
-
-	// TODO: add concurrency here if needed
-	// update albums associated with the image
-	if err := h.svc.UpdateAlbumImages(ctx, existing.Id, cmd.AlbumSlugs); err != nil {
-		log.Error(fmt.Sprintf("/images/slug handler failed to update image albums: %v", err))
-		h.svc.HandleImageServiceError(ctx, err, w)
-		return
-	}
-
-	// update permissions associated with the image
-	if err := h.perms.UpdateImagePermissions(ctx, existing.Id, cmd.PermissionSlugs); err != nil {
-		log.Error(fmt.Sprintf("/images/slug handler failed to update image permissions: %v", err))
 		h.svc.HandleImageServiceError(ctx, err, w)
 		return
 	}
