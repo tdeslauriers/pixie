@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -328,10 +327,11 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 	}
 
 	// build the image data slice
-	images := make([]api.ImageData, len(records))
+	images := make([]api.ImageData, 0, len(records))
 
 	var (
 		wg    sync.WaitGroup
+		imgCh = make(chan api.ImageData, len(records))
 		errCh = make(chan error, len(records))
 	)
 
@@ -364,7 +364,7 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 			// possible all fields will be empty if no images are attached to the album
 			// if the id is empty, very likely all fields are empty
 			if img.Id == "" {
-				log.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s", i, r.AlbumId))
+				log.Warn(fmt.Sprintf("image index[%d] fields are empty for album %s: %s", i, r.AlbumId, r.AlbumTitle))
 				return
 			}
 
@@ -432,12 +432,13 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 			// will only log errors since this could be a result of image pipeline failure
 			// front end will need to gracefully handle missing images
 			if len(targetsErrCh) > 0 {
-				errMsgs := make([]string, 0, len(errCh))
+				errs := make([]error, 0, len(errCh))
 				for e := range targetsErrCh {
-					errMsgs = append(errMsgs, e.Error())
+					errs = append(errs, e)
 				}
-				log.Error(fmt.Sprintf("error(s) occurred getting signed URLs for image '%s': %s", img.Slug, strings.Join(errMsgs, "; ")))
-				return
+				log.Error(fmt.Sprintf("error(s) occurred getting signed URLs for image '%s': %v", img.Slug, errors.Join(errs...)))
+				// not returning error since this could be a result of image pipeline failure
+				// will still want to return the image data so front end can gracefully handle missing images
 			}
 
 			// collect the signed URLs
@@ -464,13 +465,14 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 				log.Error(fmt.Sprintf("no blur signed url found for image '%s'", img.Slug))
 			}
 
-			// set the image data in the slice
-			images[i] = *img
+			// send to the channel
+			imgCh <- *img
 
 		}(i, r)
 	}
 
 	wg.Wait()
+	close(imgCh)
 	close(errCh)
 
 	// check for errors during decryption and URL generation
@@ -484,6 +486,10 @@ func (s *albumService) buildImageData(ctx context.Context, records []api.AlbumIm
 		if len(errs) > 0 {
 			return nil, fmt.Errorf("failed to build image data:: %v", errors.Join(errs...))
 		}
+	}
+
+	for img := range imgCh {
+		images = append(images, img)
 	}
 
 	// return the images slice

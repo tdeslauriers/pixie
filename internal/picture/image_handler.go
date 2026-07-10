@@ -397,7 +397,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// is update  to image data necessary?
+	// is update to image data necessary?
 	if existing.Title == updated.Title &&
 		existing.Description == updated.Description &&
 		existing.ImageDate == updated.ImageDate &&
@@ -630,3 +630,34 @@ func (h *imageHandler) getValidAlbumIds(ctx context.Context, username string, al
 
 	return ids, nil
 }
+
+// func (h *imageHandler) handleDeleteImageRecord(w http.ResponseWriter, r *http.Request) {
+
+// 		// get telemetry from request
+// 	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
+// 	log := h.logger.With(tel.TelemetryFields()...)
+
+// 	// add telemetry to context for downstream calls + service functions
+// 	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
+
+// 	// validate s2s token
+// 	svcToken := r.Header.Get("Service-Authorization")
+// 	authedSvc, err := h.s2s.BuildAuthorized(writeImagesAllowed, svcToken)
+// 	if err != nil {
+// 		log.Error("failed to validate s2s token", "err", err.Error())
+// 		connect.RespondAuthFailure(connect.S2s, err, w)
+// 		return
+// 	}
+// 	log = log.With("principal_service", authedSvc.Claims.Subject)
+
+// 	// validate iam token
+// 	accessToken := r.Header.Get("Authorization")
+// 	authedUser, err := h.iam.BuildAuthorized(writeImagesAllowed, accessToken)
+// 	if err != nil {
+// 		log.Error("failed to validate iam token", "err", err.Error())
+// 		connect.RespondAuthFailure(connect.User, err, w)
+// 		return
+// 	}
+// 	log = log.With("principal_user", authedUser.Claims.Subject)
+
+// }
