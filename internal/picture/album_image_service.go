@@ -34,6 +34,10 @@ type AlbumImageService interface {
 	// It adds new associations and removes old ones.
 	// Returns an error if any operation fails.
 	UpdateAlbumImages(ctx context.Context, imageId string, albumSlugs []string) error
+
+	// DeleteAlbumImages deletes all album-image xref records associated with an image uuid,
+	// effectively removing all albums from the image.
+	DeleteAlbumImages(imageId string) error
 }
 
 // NewAlbumImageService creates a new AlbumImageService instace and returns a pointer to the concrete implementation.
@@ -327,6 +331,23 @@ func (s *albumImageService) UpdateAlbumImages(ctx context.Context, imageId strin
 		log.Info(fmt.Sprintf("successfully updated albums for image '%s'", imageId))
 	} else {
 		log.Info(fmt.Sprintf("no album changes detected for image '%s', nothing to update", imageId))
+	}
+
+	return nil
+}
+
+// DeleteAlbumImages deletes all album-image xref records associated with an image uuid,
+// effectively removing all albums from the image.
+func (s *albumImageService) DeleteAlbumImages(imageId string) error {
+
+	// validate the image id
+	if err := validate.ValidateUuid(imageId); err != nil {
+		return fmt.Errorf("image Id must be a valid UUID")
+	}
+
+	// delete the xref record from the database
+	if err := s.sql.DeleteAllAlbumImageXrefs(imageId); err != nil {
+		return fmt.Errorf("failed to delete album-image xref records for image '%s': %v", imageId, err)
 	}
 
 	return nil

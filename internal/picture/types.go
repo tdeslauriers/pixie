@@ -23,11 +23,12 @@ func NewService(
 	i data.Indexer,
 	c data.Cryptor,
 	obj storage.ObjectStorage,
-	q chan pipeline.ReprocessCmd) Service {
+	rq chan pipeline.ReprocessCmd,
+	dq chan pipeline.DeletionCmd) Service {
 	return &service{
 
 		AlbumImageService: NewAlbumImageService(sql, i, c),
-		ImageService:      NewImageService(sql, i, c, obj, q),
+		ImageService:      NewImageService(sql, i, c, obj, rq, dq),
 		ImageServiceErr:   NewImageServiceErr(),
 	}
 }

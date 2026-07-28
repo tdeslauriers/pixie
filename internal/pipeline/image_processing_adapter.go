@@ -145,7 +145,7 @@ func (r *repository) InsertAlbumImageXref(xref api.AlbumImageXref) error {
 			album_uuid,
 			image_uuid,
 			created_at
-		) VALUES (?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id` // no-op update to avoid duplicate key error
 
 	return data.InsertRecord(r.sql, qry, xref)
 }

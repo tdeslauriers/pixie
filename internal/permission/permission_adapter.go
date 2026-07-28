@@ -30,6 +30,9 @@ type Repository interface {
 
 	// DeleteImagePermissionXref deletes an image permission cross-reference record from the database.
 	DeleteImagePermissionXref(imageId, permissionId string) error
+
+	// DeleteImagePermissionXrefs deletes all image permission cross-reference records associated with an image from the database.
+	DeleteImagePermissionXrefs(imageId string) error
 }
 
 // NewRepository creates a new Repository instance, returning a pointer to the concrete implementation.
@@ -157,4 +160,14 @@ func (r *repository) DeleteImagePermissionXref(imageId, permissionId string) err
 		WHERE image_uuid = ? AND permission_uuid = ?`
 
 	return data.DeleteRecord(r.sql, qry, imageId, permissionId)
+}
+
+// DeleteImagePermissionXrefs deletes all image permission cross-reference records associated with an image from the database.
+func (r *repository) DeleteImagePermissionXrefs(imageId string) error {
+
+	qry := `
+		DELETE FROM image_permission 
+		WHERE image_uuid = ?`
+
+	return data.DeleteRecord(r.sql, qry, imageId)
 }

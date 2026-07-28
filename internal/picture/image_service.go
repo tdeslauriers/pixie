@@ -38,6 +38,9 @@ type ImageService interface {
 	// Once meta data persisted, a presigned put url is generated and returned.
 	// The image processing pipeline will build the rest of the record upon ingestion of the image file.
 	BuildPlaceholder(ctx context.Context, cmd api.AddMetaDataCmd) (*api.Placeholder, error)
+
+	// DeleteImage deletes an image record from the database and removes the associated image file from object storage.
+	DeleteImage(ctx context.Context, imageData *api.ImageData) error
 }
 
 // NewImageService creates a new image service instance, returning a pointer to the concrete implementation.
@@ -45,7 +48,8 @@ func NewImageService(
 	sql *sql.DB,
 	i data.Indexer, c data.Cryptor,
 	obj storage.ObjectStorage,
-	q chan pipeline.ReprocessCmd,
+	rq chan pipeline.ReprocessCmd,
+	dq chan pipeline.DeletionCmd,
 ) ImageService {
 
 	return &imageService{
@@ -53,7 +57,8 @@ func NewImageService(
 		indexer:   i,
 		cryptor:   crypt.NewCryptor(c),
 		store:     obj,
-		reprocess: q,
+		reprocess: rq,
+		delete:    dq,
 
 		logger: slog.Default().
 			With(slog.String(util.PackageKey, util.PackagePicture)).
@@ -70,6 +75,7 @@ type imageService struct {
 	cryptor   crypt.Cryptor // image data specific wrapper around data.Cryptor
 	store     storage.ObjectStorage
 	reprocess chan pipeline.ReprocessCmd
+	delete    chan pipeline.DeletionCmd
 
 	logger *slog.Logger
 }
@@ -450,4 +456,40 @@ func (s *imageService) getObjectUrl(ctx context.Context, key string, width int, 
 		Width:     width,
 		SignedUrl: url.String(),
 	}
+}
+
+// DeleteImage is the concrete implementation of the interface method which
+// deletes an image record from the database and removes the associated image file from object storage.
+func (s *imageService) DeleteImage(ctx context.Context, imageData *api.ImageData) error {
+
+	// validate the slug
+	// redundant check, but good practice
+	if err := validate.ValidateUuid(imageData.Slug); err != nil {
+		return fmt.Errorf("image slug '%s' is not well-formed", imageData.Slug)
+	}
+
+	// get blind index for the slug
+	index, err := s.indexer.ObtainBlindIndex(imageData.Slug)
+	if err != nil {
+		return fmt.Errorf("failed to generate blind index for image slug '%s': %v", imageData.Slug, err)
+	}
+
+	// delete the image record from the database
+	if err := s.db.DeleteImage(index); err != nil {
+		return fmt.Errorf("failed to delete image record for id '%s': %v", imageData.Id, err)
+	}
+	s.logger.Info("image record successfully deleted from database", "slug", imageData.Slug, "id", imageData.Id)
+
+	// send a deletion command to the deletion queue for the object storage service
+	s.logger.Info("sending deletion command to deletion queue", "slug", imageData.Slug, "id", imageData.Id)
+	s.delete <- pipeline.DeletionCmd{
+		Id:        imageData.Id,
+		FileName:  imageData.FileName,
+		FileType:  imageData.FileType,
+		ObjectKey: imageData.ObjectKey,
+		Slug:      imageData.Slug,
+	}
+
+	return nil
+
 }

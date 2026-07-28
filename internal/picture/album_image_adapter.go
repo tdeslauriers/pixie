@@ -24,6 +24,9 @@ type AlbumImageRepository interface {
 
 	// DeleteAlbumImageXref deletes an album-image xref record from the database.
 	DeleteAlbumImageXref(albumId, imageId string) error
+
+	// DeleteAllAlbumImageXrefs deletes all album-image xref records associated with an image uuid, effectively removing all albums from the image.
+	DeleteAllAlbumImageXrefs(imageId string) error
 }
 
 // NewAlbumImageRepository creates a new AlbumImageRepository instance, returning a pointer to the concrete implementation.
@@ -115,4 +118,14 @@ func (a *albumImageRepository) DeleteAlbumImageXref(albumId, imageId string) err
 		WHERE album_uuid = ? AND image_uuid = ?`
 
 	return data.DeleteRecord(a.sql, qry, albumId, imageId)
+}
+
+// DeleteAllAlbumImageXrefs deletes all album-image xref records associated with an image uuid, effectively removing all albums from the image.
+func (a *albumImageRepository) DeleteAllAlbumImageXrefs(imageId string) error {
+
+	qry := `
+		DELETE FROM album_image 
+		WHERE image_uuid = ?`
+
+	return data.DeleteRecord(a.sql, qry, imageId)
 }

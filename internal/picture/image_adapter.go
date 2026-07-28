@@ -42,6 +42,9 @@ type Repository interface {
 	// UpdateImage updates an existing image metadata record in the database.
 	// Note: fields must be encrypted prior to calling this function.
 	UpdateImage(record api.ImageRecord) error
+
+	// DeleteImage deletes an image metadata record from the database.
+	DeleteImage(slugIndex string) error
 }
 
 // NewRepository creates a new Repository instance, returning a pointer to the concrete implementation.
@@ -210,4 +213,14 @@ func (r *repository) UpdateImage(record api.ImageRecord) error {
 		record.IsPublished, // update
 		record.SlugIndex,   // where clause
 	)
+}
+
+// DeleteImage deletes an image metadata record from the database.
+func (r *repository) DeleteImage(slugIndex string) error {
+
+	qry := `
+		DELETE FROM image
+		WHERE slug_index = ?`
+
+	return data.DeleteRecord(r.sql, qry, slugIndex)
 }

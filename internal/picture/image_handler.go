@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tdeslauriers/carapace/pkg/connect"
@@ -21,8 +22,9 @@ import (
 )
 
 var (
-	readImagesAllowed  = []string{"r:pixie:*", "r:pixie:images:*"}
-	writeImagesAllowed = []string{"w:pixie:*", "w:pixie:images:*"}
+	readImagesAllowed   = []string{"r:pixie:*", "r:pixie:images:*"}
+	writeImagesAllowed  = []string{"w:pixie:*", "w:pixie:images:*"}
+	deleteImagesAllowed = []string{"d:pixie:*", "d:pixie:images:*"}
 )
 
 // Handler is the interface for image processing service handlers.
@@ -80,6 +82,9 @@ func (h *imageHandler) HandleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	case http.MethodPost: // image upload
 		h.handleAddImageRecord(w, r)
+		return
+	case http.MethodDelete:
+		h.handleDeleteImageRecord(w, r)
 		return
 	default:
 		// Handle unsupported methods
@@ -237,16 +242,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(imageData); err != nil {
-		log.Error("failed to encode image data to json", "err", err.Error())
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to encode image data to json",
-		}
-		e.SendJsonErr(w)
-		return
-	}
+	connect.SendJsonSuccess(w, http.StatusOK, imageData)
 }
 
 func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +333,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	// no risk since the slug will not be overwritten, but good practice to validate
 	// and a good check for tampering with the request overall
 	if existing.Slug != slug {
-		log.Error(fmt.Sprintf("/images/slug handler slug mismatch: expected '%s', got '%s'", existing.Slug, slug))
+		log.Error("/images/slug handler slug mismatch", "existing_slug", existing.Slug, "cmd_slug", slug)
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    fmt.Sprintf("slug mismatch: expected '%s', got '%s'", existing.Slug, slug),
@@ -347,7 +343,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	}
 
 	if existing.Slug != cmd.Slug {
-		log.Error(fmt.Sprintf("/images/slug cmd slug mismatch: expected '%s', got '%s'", existing.Slug, cmd.Slug))
+		log.Error("/images/slug cmd slug mismatch", "existing_slug", existing.Slug, "cmd_slug", cmd.Slug)
 		e := connect.ErrorHttp{
 			StatusCode: http.StatusUnprocessableEntity,
 			Message:    fmt.Sprintf("slug mismatch: expected '%s', got '%s'", existing.Slug, cmd.Slug),
@@ -385,14 +381,22 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 	// Note these check if necessary before firing, need to go before the image update check
 	// update albums associated with the image
 	if err := h.svc.UpdateAlbumImages(ctx, existing.Id, cmd.AlbumSlugs); err != nil {
-		log.Error(fmt.Sprintf("/images/slug handler failed to update image albums: %v", err))
+		log.Error("/images/slug handler failed to update image albums",
+			"err", err.Error(),
+			"image_slug", existing.Slug,
+			"image_id", existing.Id,
+		)
 		h.svc.HandleImageServiceError(ctx, err, w)
 		return
 	}
 
 	// update permissions associated with the image
 	if err := h.perms.UpdateImagePermissions(ctx, existing.Id, cmd.PermissionSlugs); err != nil {
-		log.Error(fmt.Sprintf("/images/slug handler failed to update image permissions: %v", err))
+		log.Error("/images/slug handler failed to update image permissions",
+			"err", err.Error(),
+			"image_slug", existing.Slug,
+			"image_id", existing.Id,
+		)
 		h.svc.HandleImageServiceError(ctx, err, w)
 		return
 	}
@@ -404,13 +408,23 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 		existing.ObjectKey == updated.ObjectKey &&
 		existing.IsArchived == updated.IsArchived &&
 		existing.IsPublished == updated.IsPublished {
-		log.Warn(fmt.Sprintf("no changes detected for image slug '%s', skipping update", existing.Slug))
+
+		log.Warn("no changes detected in image record update, skipping database update",
+			"image_slug", existing.Slug,
+			"image_id", existing.Id,
+		)
+		w.WriteHeader(http.StatusNoContent)
+
 		return
 	}
 
 	// handles updating the database and the object store if necessary
 	if err := h.svc.UpdateImageData(ctx, existing, updated); err != nil {
-		log.Error(fmt.Sprintf("/images/slug handler failed to update image data: %v", err))
+		log.Error("failed to update image data",
+			"err", err.Error(),
+			"image_slug", existing.Slug,
+			"image_id", existing.Id,
+		)
 		h.svc.HandleImageServiceError(ctx, err, w)
 		return
 	}
@@ -456,7 +470,7 @@ func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Re
 
 	if len(changes) > 0 {
 		log = log.With(changes...)
-		log.Info(fmt.Sprintf("successfully updated image slug %s", existing.Slug))
+		log.Info("successfully updated image record", "image_slug", existing.Slug, "image_id", existing.Id)
 	}
 
 	w.WriteHeader(http.StatusNoContent) // 204 No Content
@@ -546,7 +560,7 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 						return
 					}
 
-					log.Info(fmt.Sprintf("created xref between image '%s' to album '%s'", imgId, albId))
+					log.Info("created xref between image and album", "album_id", albId, "image_id", imgId)
 				}(albumId, placeholder.Id)
 			}
 		}
@@ -584,18 +598,12 @@ func (h *imageHandler) handleAddImageRecord(w http.ResponseWriter, r *http.Reque
 		}
 	}()
 
-	log.Info(fmt.Sprintf("successfully created placeholder image record with slug %s", placeholder.Slug))
+	log.Info("successfully processed add image record",
+		"image_slug", placeholder.Slug,
+		"image_id", placeholder.Id,
+	)
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(placeholder); err != nil {
-		log.Error("failed to json encode placeholder image data to json", "err", err.Error())
-		e := connect.ErrorHttp{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to json encode placeholder image data to json",
-		}
-		e.SendJsonErr(w)
-		return
-	}
+	connect.SendJsonSuccess(w, http.StatusOK, placeholder)
 }
 
 // getValidAlbumIds is a helper function that retrieves the valid album IDs from the provided album command data.
@@ -631,33 +639,106 @@ func (h *imageHandler) getValidAlbumIds(ctx context.Context, username string, al
 	return ids, nil
 }
 
-// func (h *imageHandler) handleDeleteImageRecord(w http.ResponseWriter, r *http.Request) {
+func (h *imageHandler) handleDeleteImageRecord(w http.ResponseWriter, r *http.Request) {
 
-// 		// get telemetry from request
-// 	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
-// 	log := h.logger.With(tel.TelemetryFields()...)
+	// get telemetry from request
+	tel := telemetry.ObtainHttpTelemetry(r, h.logger)
+	log := h.logger.With(tel.TelemetryFields()...)
 
-// 	// add telemetry to context for downstream calls + service functions
-// 	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
+	// add telemetry to context for downstream calls + service functions
+	ctx := context.WithValue(r.Context(), telemetry.TelemetryKey, tel)
 
-// 	// validate s2s token
-// 	svcToken := r.Header.Get("Service-Authorization")
-// 	authedSvc, err := h.s2s.BuildAuthorized(writeImagesAllowed, svcToken)
-// 	if err != nil {
-// 		log.Error("failed to validate s2s token", "err", err.Error())
-// 		connect.RespondAuthFailure(connect.S2s, err, w)
-// 		return
-// 	}
-// 	log = log.With("principal_service", authedSvc.Claims.Subject)
+	// validate s2s token
+	svcToken := r.Header.Get("Service-Authorization")
+	authedSvc, err := h.s2s.BuildAuthorized(deleteImagesAllowed, svcToken)
+	if err != nil {
+		log.Error("failed to validate s2s token", "err", err.Error())
+		connect.RespondAuthFailure(connect.S2s, err, w)
+		return
+	}
+	log = log.With("principal_service", authedSvc.Claims.Subject)
 
-// 	// validate iam token
-// 	accessToken := r.Header.Get("Authorization")
-// 	authedUser, err := h.iam.BuildAuthorized(writeImagesAllowed, accessToken)
-// 	if err != nil {
-// 		log.Error("failed to validate iam token", "err", err.Error())
-// 		connect.RespondAuthFailure(connect.User, err, w)
-// 		return
-// 	}
-// 	log = log.With("principal_user", authedUser.Claims.Subject)
+	// validate iam token
+	accessToken := r.Header.Get("Authorization")
+	authedUser, err := h.iam.BuildAuthorized(deleteImagesAllowed, accessToken)
+	if err != nil {
+		log.Error("failed to validate iam token", "err", err.Error())
+		connect.RespondAuthFailure(connect.User, err, w)
+		return
+	}
+	log = log.With("principal_user", authedUser.Claims.Subject)
 
-// }
+	// get slug from request path
+	slug, err := connect.GetValidSlug(r)
+	if err != nil {
+		log.Error("failed to get valid slug from request path", "err", err.Error())
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusBadRequest,
+			Message:    err.Error(),
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
+	// look up slug in database to get image record
+	imageData, err := h.svc.GetImageData(ctx, slug, nil)
+	if err != nil {
+		log.Error("failed to get image data for deletion", "err", err.Error())
+		h.svc.HandleImageServiceError(ctx, err, w)
+		return
+	}
+
+	// delete albums and permissions associations with the imageId
+	var (
+		wg    sync.WaitGroup
+		errCh = make(chan error, 2)
+	)
+
+	// delete album-image xrefs
+	wg.Add(1)
+	go func(imgId string, errCh chan<- error, wg *sync.WaitGroup) {
+		defer wg.Done()
+
+		if err := h.svc.DeleteAlbumImages(imgId); err != nil {
+			errCh <- fmt.Errorf("failed to delete album-image xrefs for image '%s': %v", imgId, err)
+		}
+
+		log.Info("deleted images album-image xrefs", "image_id", imageData.Id, "image_slug", imageData.Slug)
+	}(imageData.Id, errCh, &wg)
+
+	// delete image-permission xrefs
+	wg.Add(1)
+	go func(imgId string, errCh chan<- error, wg *sync.WaitGroup) {
+		defer wg.Done()
+
+		if err := h.perms.DeleteImagePermissions(imgId); err != nil {
+			errCh <- fmt.Errorf("failed to delete image-permission xrefs for image '%s': %v", imgId, err)
+		}
+
+		log.Info("deleted image-permission xrefs", "image_id", imageData.Id, "image_slug", imageData.Slug)
+	}(imageData.Id, errCh, &wg)
+
+	wg.Wait()
+	close(errCh)
+
+	if len(errCh) > 0 {
+		for e := range errCh {
+			log.Error(e.Error())
+		}
+		h.svc.HandleImageServiceError(ctx, fmt.Errorf("failed to delete image associations for image '%s'", imageData.Slug), w)
+		return
+	}
+
+	// delete the image record from the database and object store
+	if err := h.svc.DeleteImage(ctx, imageData); err != nil {
+		log.Error("failed to delete image data", "err", err.Error())
+		h.svc.HandleImageServiceError(ctx, err, w)
+		return
+	}
+
+	log.Info("successfully processed deletion of image record",
+		"image_slug", imageData.Slug,
+		"image_id", imageData.Id,
+	)
+	w.WriteHeader(http.StatusNoContent) // 204 No Content
+}

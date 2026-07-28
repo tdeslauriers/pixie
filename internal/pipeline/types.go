@@ -2,29 +2,114 @@ package pipeline
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"fmt"
 	"image"
 	"image/draw"
 	"image/jpeg"
 	"io"
+	"log/slog"
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/evanoberholster/imagemeta"
 	"github.com/rwcarlsen/goexif/exif"
+	"github.com/tdeslauriers/carapace/pkg/data"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/carapace/pkg/validate"
+	"github.com/tdeslauriers/pixie/internal/crypt"
+	"github.com/tdeslauriers/pixie/internal/util"
 	"github.com/tdeslauriers/pixie/pkg/api"
 
 	redraw "golang.org/x/image/draw"
 )
 
+// ImagePipline provides methods for processing image files submitted to the pipeline.
+type ImagePipline interface {
+
+	// UploadQueue processes images submitted to the pipeline queue, parsing the webhook,
+	// reading the exif data if it exists, generating thumbnails, and moving the image to the correct
+	// directory in object storage, typically based on the image year date.
+	UploadQueue(ctx context.Context)
+
+	// ReprocessQueue reprocesses images in the pipeline queue, based on the ReprocessCmd instructions/criteria.
+	// It is primarily used for reprocessing images that may have failed initial processing, such as images
+	// that were uploaded without exif data and landed in staging.  It is also called in order to generate any
+	// missing image resolutions or tile resolutions that errored upon initial processing.
+	ReprocessQueue(ctx context.Context)
+
+	// DeletionQueue processes deletion requests for images in the pipeline queue, based on the DeletionCmd instructions/criteria.
+	// It is primarily used for deleting images that have errored initial and reprocessing such that the database and the minio files
+	// cannot be reconciled easily.  It can also be used to delete any image but that is a more rare use case and images can
+	// be archived instead of deleted in most cases.
+	DeletionQueue(ctx context.Context)
+}
+
+// NewImagePipeline creates a new instance of ImageProcessor, returning
+// a pointer to the concrete implementation.
+func NewImagePipeline(
+	up chan storage.WebhookPutObject,
+	re chan ReprocessCmd,
+	de chan DeletionCmd,
+	wg *sync.WaitGroup,
+	db *sql.DB,
+	i data.Indexer,
+	c data.Cryptor,
+	o storage.ObjectStorage,
+) ImagePipline {
+
+	return &imagePipeline{
+		uploadQueue:    up,
+		reprocessQueue: re,
+		deletionQueue:  de,
+		wg:             wg,
+
+		db:       NewRepository(db),
+		indexer:  i,
+		cryptor:  crypt.NewCryptor(c),
+		objStore: o,
+
+		logger: slog.Default().
+			With(slog.String(util.PackageKey, util.PackagePipeline)).
+			With(slog.String(util.ComponentKey, util.ComponentImageProcessor)),
+	}
+}
+
+var _ ImagePipline = (*imagePipeline)(nil)
+
+// imagePipeline is the concrete implementation of the ImageProcessor interface, which
+// provides methods for processing image files submitted to the pipeline.
+type imagePipeline struct {
+	uploadQueue    chan storage.WebhookPutObject
+	reprocessQueue chan ReprocessCmd
+	deletionQueue  chan DeletionCmd
+	wg             *sync.WaitGroup
+
+	db       Repository
+	indexer  data.Indexer
+	cryptor  crypt.Cryptor
+	objStore storage.ObjectStorage
+
+	logger *slog.Logger
+}
+
 const (
 	JpegQuality  int = 85
 	BlurLongSide int = 32 // long side in pixels for blur/placeholder image
 )
+
+// DeletionCmd represents a request to delete an existing picture.
+type DeletionCmd struct {
+	Id        string
+	FileName  string
+	FileType  string
+	Slug      string
+	ObjectKey string
+}
 
 // ReprocessCmd represents a request to re-process an existing picture.
 // For example, an image has its date updated or added if missing which requires

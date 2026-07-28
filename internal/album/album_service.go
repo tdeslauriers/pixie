@@ -49,6 +49,9 @@ type Service interface {
 
 	// InsertAlbumImageXref creates a new record in the album_image xref table to associate an image with an album.
 	InsertAlbumImageXref(albumId, imageId string) error
+
+	// DeleteAlbumImageXref deletes all records in the album_image xref table asssociated with an image uuid.
+	DeleteAlbumImageXrefs(imageId string) error
 }
 
 // NewService creates a new album service and provides a pointer to a concrete implementation.
@@ -639,4 +642,21 @@ func (s *albumService) getObjectUrl(ctx context.Context, key string, width int, 
 		SignedUrl: url.String(),
 	}
 
+}
+
+// DeleteAlbumImageXref deletes a record in the album_image xref table to disassociate an image from an album.
+func (s *albumService) DeleteAlbumImageXrefs(imageId string) error {
+
+	// validate the image id
+	// redundant check, but good practice
+	if err := validate.ValidateUuid(imageId); err != nil {
+		return fmt.Errorf("invalid image id: %s", imageId)
+	}
+
+	// delete the xref record from the database
+	if err := s.db.DeleteAlbumImageXrefs(imageId); err != nil {
+		return fmt.Errorf("failed to delete album-image xref record from database: %v", err)
+	}
+
+	return nil
 }

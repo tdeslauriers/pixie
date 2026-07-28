@@ -182,8 +182,9 @@ func New(config *config.Config) (Gallery, error) {
 	imagePermissionService := permission.NewImagePermissionService(db, indexer, cryptor)
 	permissionService := permission.NewService(exoPermissionService, patronPermissionService, imagePermissionService)
 
-	// create reprocess queue
+	// create reprocess and deletion queue
 	reprocessQueue := make(chan pipeline.ReprocessCmd, 100)
+	deletionQueue := make(chan pipeline.DeletionCmd, 100)
 
 	return &gallery{
 		config:           *config,
@@ -197,7 +198,7 @@ func New(config *config.Config) (Gallery, error) {
 		iamVerifier:      jwt.NewVerifier(config.ServiceName, iamPublicKey),
 		identity:         connect.NewS2sCaller(config.UserAuth.Url, util.ServiceIdentity, s2sClient, retry),
 		patVerifier:      pat.NewVerifier(util.ServiceS2s, s2s, tokenProvider),
-		pictures:         picture.NewService(db, indexer, cryptor, objStore, reprocessQueue),
+		pictures:         picture.NewService(db, indexer, cryptor, objStore, reprocessQueue, deletionQueue),
 		albums:           album.NewService(db, indexer, cryptor, objStore),
 		staged:           album.NewStagedImageService(db, indexer, cryptor, objStore),
 		patrons:          patron.NewService(patronRepository, indexer, cryptor, permissionService),
@@ -205,6 +206,7 @@ func New(config *config.Config) (Gallery, error) {
 
 		uploadQueue:    make(chan storage.WebhookPutObject, 100),
 		reprocessQueue: reprocessQueue,
+		deletionQueue:  deletionQueue,
 
 		logger: slog.Default().
 			With(slog.String(util.ServiceKey, util.ServiceGallery)).
@@ -236,6 +238,7 @@ type gallery struct {
 
 	uploadQueue    chan storage.WebhookPutObject
 	reprocessQueue chan pipeline.ReprocessCmd
+	deletionQueue  chan pipeline.DeletionCmd
 	wg             sync.WaitGroup
 
 	logger *slog.Logger
@@ -256,15 +259,17 @@ func (g *gallery) Run(ctx context.Context) error {
 	imgPipeline := pipeline.NewImagePipeline(
 		g.uploadQueue,
 		g.reprocessQueue,
+		g.deletionQueue,
 		&g.wg,
 		g.repository,
 		g.indexer,
 		g.cryptor,
 		g.objectStorage)
 
-	g.wg.Add(2)
+	g.wg.Add(3)
 	go imgPipeline.UploadQueue(ctx)
 	go imgPipeline.ReprocessQueue(ctx)
+	go imgPipeline.DeletionQueue(ctx)
 
 	// register handlers
 	mux := http.NewServeMux()
@@ -333,6 +338,7 @@ func (g *gallery) Run(ctx context.Context) error {
 	g.wg.Wait()
 	close(g.uploadQueue)
 	close(g.reprocessQueue)
+	close(g.deletionQueue)
 
 	return nil
 }

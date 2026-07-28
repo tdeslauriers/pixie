@@ -30,6 +30,10 @@ type ImagePermissionService interface {
 	// It takes the image ID and a slice of permission slugs to be associated with the image.
 	// Returns an error if any.
 	UpdateImagePermissions(ctx context.Context, imageId string, permissionSlugs []string) error
+
+	// DeleteImagePermissions deletes all xrefs associated with an image, effectively removing all permissions from the image.
+	// It takes the image ID as input and returns an error if any.
+	DeleteImagePermissions(imageId string) error
 }
 
 // NewImagePermissionService creates a new ImagePermissionService instance, returning a pointer to the concrete implementation.
@@ -308,6 +312,24 @@ func (s *imagePermissionService) UpdateImagePermissions(ctx context.Context, ima
 
 	} else {
 		log.Info(fmt.Sprintf("no changes to permissions for image '%s'", imageId))
+	}
+
+	return nil
+}
+
+// DeleteImagePermissions is the concrete implementation of the interface method which
+// deletes all xrefs associated with an image, effectively removing all permissions from the image.
+// It takes the image ID as input and returns an error if any.
+func (s *imagePermissionService) DeleteImagePermissions(imageId string) error {
+
+	// validate the image id
+	if err := validate.ValidateUuid(imageId); err != nil {
+		return fmt.Errorf("image Id must be a valid UUID")
+	}
+
+	// delete the xref records from the database
+	if err := s.sql.DeleteImagePermissionXrefs(imageId); err != nil {
+		return fmt.Errorf("failed to delete image-permission xref records for image '%s': %v", imageId, err)
 	}
 
 	return nil

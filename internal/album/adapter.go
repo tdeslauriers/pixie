@@ -44,6 +44,9 @@ type AlbumRepository interface {
 	// Note: not all fields are allowed to be updated.  Also, relevant fields need to be encrypted
 	// before calling this method.
 	UpdateAlbum(album api.AlbumRecord) error
+
+	// DeleteAlbumImageXrefs deletes all records in the album_image xref table asssociated with an image uuid.
+	DeleteAlbumImageXrefs(imageId string) error
 }
 
 // NewAlbumRepository creates a new instance of AlbumRepository interface, returning
@@ -219,4 +222,14 @@ func (a *albumAdapter) UpdateAlbum(album api.AlbumRecord) error {
 		album.UpdatedAt,   // to update
 		album.SlugIndex,   // where clause
 	)
+}
+
+// DeleteAlbumImageXrefs deletes all records in the album_image xref table asssociated with an image uuid.
+func (a *albumAdapter) DeleteAlbumImageXrefs(imageId string) error {
+
+	qry := `
+		DELETE FROM album_image
+		WHERE image_uuid = ?`
+
+	return data.DeleteRecord(a.db, qry, imageId)
 }
