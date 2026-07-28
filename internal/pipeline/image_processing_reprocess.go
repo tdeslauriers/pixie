@@ -69,7 +69,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 
 	// create child context with timeout for processing the command, to prevent hanging.
 	// defer guarantees the context is released on every path, including early returns.
-	itemCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	reprocessCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	// generate telemetry -> in this case just a trace parent for web calls
@@ -120,14 +120,14 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 	// this must be done first before moving/building resolutions/tiles in order
 	// to validate the object exists in the first place.
 	// if it does not exists, or fails to move, there is no point in continuing.
-	if err := p.objStore.MoveObject(itemCtx, cmd.CurrentObjKey, cmd.UpdatedObjKey); err != nil {
+	if err := p.objStore.MoveObject(reprocessCtx, cmd.CurrentObjKey, cmd.UpdatedObjKey); err != nil {
 
 		if strings.Contains(err.Error(), "does not exist in object storage") {
 
 			// the original may already have been moved by a prior attempt that
 			// failed partway through -> check the destination before assuming
 			// the object is lost, so retries of partial successes are idempotent
-			found, lerr := p.objStore.ListObjects(itemCtx, cmd.UpdatedObjKey)
+			found, lerr := p.objStore.ListObjects(reprocessCtx, cmd.UpdatedObjKey)
 			if lerr == nil && len(found) > 0 {
 				log.Info(
 					"original image already at updated location, continuing",
@@ -183,7 +183,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 			updatedResKey := fmt.Sprintf("%s/%s_w%d%s", filepath.Dir(c.UpdatedObjKey), slug, w, ext)
 
 			// the object should already exist, try to move it
-			if err := p.objStore.MoveObject(itemCtx, existingResKey, updatedResKey); err != nil {
+			if err := p.objStore.MoveObject(reprocessCtx, existingResKey, updatedResKey); err != nil {
 
 				// if it does not exist, need to build it
 				if strings.Contains(err.Error(), "does not exist in object storage") {
@@ -195,7 +195,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 					)
 
 					// stream the original image from object storage + create the resolution
-					if err := p.objStore.WithObject(itemCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
+					if err := p.objStore.WithObject(reprocessCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
 
 						// decode the image
 						src, _, err := image.Decode(r)
@@ -205,7 +205,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 
 						// resize the image to the target width, maintaining aspect ratio,
 						// encode to jpeg, and upload to object storage
-						if err := p.resizeAndPut(itemCtx, src, w, updatedResKey, c.FileType); err != nil {
+						if err := p.resizeAndPut(reprocessCtx, src, w, updatedResKey, c.FileType); err != nil {
 							return fmt.Errorf("failed to upload resized resolution image %s: %v", updatedResKey, err)
 						}
 
@@ -249,7 +249,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 			updatedTileKey := fmt.Sprintf("%s/%s_tile_w%d%s", filepath.Dir(c.UpdatedObjKey), slug, w, ext)
 
 			// the object should already exist, try to move it
-			if err := p.objStore.MoveObject(itemCtx, existingTileKey, updatedTileKey); err != nil {
+			if err := p.objStore.MoveObject(reprocessCtx, existingTileKey, updatedTileKey); err != nil {
 
 				// if it does not exist, need to build it
 				if strings.Contains(err.Error(), "does not exist in object storage") {
@@ -261,7 +261,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 					)
 
 					// stream the original image from object storage + create the tile
-					if err := p.objStore.WithObject(itemCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
+					if err := p.objStore.WithObject(reprocessCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
 
 						// decode the image
 						src, _, err := image.Decode(r)
@@ -271,7 +271,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 
 						// resize the image to the target width, maintaining aspect ratio,
 						// encode to jpeg, and upload to object storage
-						if err := p.resizeAndPut(itemCtx, src, w, updatedTileKey, c.FileType); err != nil {
+						if err := p.resizeAndPut(reprocessCtx, src, w, updatedTileKey, c.FileType); err != nil {
 							return fmt.Errorf("failed to upload resized tile image %s: %v", updatedTileKey, err)
 						}
 
@@ -313,7 +313,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 		updatedBlurKey := fmt.Sprintf("%s/%s_blur%s", filepath.Dir(c.UpdatedObjKey), slug, ext)
 
 		// the object should already exist, try to move it
-		if err := p.objStore.MoveObject(itemCtx, existingBlurKey, updatedBlurKey); err != nil {
+		if err := p.objStore.MoveObject(reprocessCtx, existingBlurKey, updatedBlurKey); err != nil {
 
 			// if it does not exist, need to build it
 			if strings.Contains(err.Error(), "does not exist in object storage") {
@@ -324,7 +324,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 				)
 
 				// stream the original image from object storage + create the blur/placeholder
-				if err := p.objStore.WithObject(itemCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
+				if err := p.objStore.WithObject(reprocessCtx, c.UpdatedObjKey, func(r storage.ReadSeekCloser) error {
 
 					// decode the image
 					src, _, err := image.Decode(r)
@@ -340,7 +340,7 @@ func (p *imagePipeline) processReprocessCmd(ctx context.Context, cmd ReprocessCm
 					}
 
 					// upload the blur/placeholder image to object storage in the same directory as the original image
-					if err := p.objStore.PutObject(itemCtx, updatedBlurKey, encoded, c.FileType); err != nil {
+					if err := p.objStore.PutObject(reprocessCtx, updatedBlurKey, encoded, c.FileType); err != nil {
 						return fmt.Errorf("failed to upload blur/placeholder image %s: %v", updatedBlurKey, err)
 					}
 
