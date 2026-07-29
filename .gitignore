@@ -27,3 +27,7 @@ go.work.sum
 # dev -> just in case
 certs/
 .pem
+
+# llms
+.claude/
+.agents/

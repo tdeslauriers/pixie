@@ -3,7 +3,6 @@ package pipeline
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"fmt"
 	"image"
 	"image/draw"
@@ -56,9 +55,9 @@ func NewImagePipeline(
 	re chan ReprocessCmd,
 	de chan DeletionCmd,
 	wg *sync.WaitGroup,
-	db *sql.DB,
+	db Repository,
 	i data.Indexer,
-	c data.Cryptor,
+	c crypt.Cryptor,
 	o storage.ObjectStorage,
 ) ImagePipline {
 
@@ -68,9 +67,9 @@ func NewImagePipeline(
 		deletionQueue:  de,
 		wg:             wg,
 
-		db:       NewRepository(db),
+		db:       db,
 		indexer:  i,
-		cryptor:  crypt.NewCryptor(c),
+		cryptor:  c,
 		objStore: o,
 
 		logger: slog.Default().

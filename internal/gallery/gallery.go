@@ -23,6 +23,7 @@ import (
 	"github.com/tdeslauriers/carapace/pkg/sign"
 	"github.com/tdeslauriers/carapace/pkg/storage"
 	"github.com/tdeslauriers/pixie/internal/album"
+	"github.com/tdeslauriers/pixie/internal/crypt"
 	"github.com/tdeslauriers/pixie/internal/notification"
 	"github.com/tdeslauriers/pixie/internal/patron"
 	"github.com/tdeslauriers/pixie/internal/permission"
@@ -261,9 +262,9 @@ func (g *gallery) Run(ctx context.Context) error {
 		g.reprocessQueue,
 		g.deletionQueue,
 		&g.wg,
-		g.repository,
+		pipeline.NewRepository(g.repository),
 		g.indexer,
-		g.cryptor,
+		crypt.NewCryptor(g.cryptor),
 		g.objectStorage)
 
 	g.wg.Add(3)
