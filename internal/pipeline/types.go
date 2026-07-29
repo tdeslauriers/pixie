@@ -28,7 +28,7 @@ import (
 	redraw "golang.org/x/image/draw"
 )
 
-// ImagePipline provides methods for processing image files submitted to the pipeline.
+// ImagePipeline provides methods for processing image files submitted to the pipeline.
 type ImagePipline interface {
 
 	// UploadQueue processes images submitted to the pipeline queue, parsing the webhook,

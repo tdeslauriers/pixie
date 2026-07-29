@@ -11,7 +11,7 @@ import (
 // deletionSweepDirs are the non-year-based "directories" in the bucket where
 // image files may have landed during upload/processing, e.g., images uploaded
 // without exif data that were parked pending a date.
-var deletionSweepDirs = []string{"uploads", "staged"}
+var deletionSweepDirs = []string{"uploads", "staging"}
 
 // DeletionQueue processes deletion requests for images in the pipeline queue, based on the DeletionCmd instructions/criteria.
 // It is primarily used for deleting images that have errored initial and reprocessing such that the database and the minio files
@@ -41,7 +41,7 @@ func (p *imagePipeline) DeletionQueue(ctx context.Context) {
 
 // processDeletionCmd processes a single deletion command: it sweeps object storage
 // for the image's original and derived files across all candidate directories,
-// bulk-deletes whatever is found, and then removes the image's database records.
+// bulk-deletes whatever is found
 func (p *imagePipeline) processDeletionCmd(ctx context.Context, cmd DeletionCmd) {
 
 	// create child context with timeout for processing each command, to prevent hanging
