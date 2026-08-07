@@ -127,7 +127,6 @@ func (p *imagePipeline) processImgUpload(ctx context.Context, webhook storage.We
 			// set the directory to the year from the image date -> ObjectKey
 			dir = year
 		} else {
-
 			// set the directory to 'staging' if no exif date found - ObjectKey
 			dir = "staging"
 		}

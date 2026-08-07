@@ -85,6 +85,12 @@ type imageService struct {
 // fetches signed URL for the image.
 func (s *imageService) GetImageData(ctx context.Context, slug string, userPs map[string]exo.PermissionRecord) (*api.ImageData, error) {
 
+	tel, ok := ctx.Value(telemetry.TelemetryKey).(*telemetry.Telemetry)
+	if !ok {
+		s.logger.Error("failed to get telemetry for get image data method")
+	}
+	log := s.logger.With(tel.TelemetryFields()...)
+
 	// validate the slug
 	// redundant check, but good practice
 	if err := validate.ValidateUuid(slug); err != nil {
@@ -202,23 +208,31 @@ func (s *imageService) GetImageData(ctx context.Context, slug string, userPs map
 	close(blurCh)
 	close(errCh)
 
-	// check for errors
+	// check for errors:
+	// note: log only.  Still need to return the metadata to the frontend
 	if len(errCh) > 0 {
 		errMsgs := make([]string, 0, len(errCh))
 		for e := range errCh {
 			errMsgs = append(errMsgs, e.Error())
 		}
-		return nil, fmt.Errorf("failed to get signed URLs for image '%s': %s", slug, strings.Join(errMsgs, "; "))
+		log.Error("failed to get signed URLs for image", "image_slug", slug, "err", strings.Join(errMsgs, "; "))
 	}
 
 	// collect the signed URLs
+	// note: log only.  Still need to return the metadata to the frontend
 	signedURLs := make([]api.ImageTarget, 0, len(urlsCh))
 	for url := range urlsCh {
 		signedURLs = append(signedURLs, url)
 	}
 
 	if len(signedURLs) == 0 {
-		return nil, fmt.Errorf("no signed URLs found for image '%s'", slug)
+		log.Error("no signed URLs found for image", "image_slug", slug)
+	}
+
+	// note: log only.  Still need to return the metadata to the frontend
+	blur, ok := <-blurCh
+	if !ok {
+		log.Error("failed to get blur url")
 	}
 
 	// create the ImageData struct to return
@@ -240,7 +254,7 @@ func (s *imageService) GetImageData(ctx context.Context, slug string, userPs map
 		IsPublished: record.IsPublished,
 
 		ImageTargets: signedURLs,
-		BlurUrl:      <-blurCh,
+		BlurUrl:      blur,
 	}
 
 	return image, nil
