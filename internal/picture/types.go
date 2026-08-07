@@ -119,8 +119,15 @@ func BuildImagePermissionsQry(userPs map[string]permissions.PermissionRecord) st
 			WHERE i.slug_index = ?`
 	qb.WriteString(baseQry)
 
+	// check if the user is a curator (admin)
+	// if they are, then return the base query without any additional filters
+	if _, ok := userPs[util.PermissionCurator]; ok {
+		return qb.String()
+	}
+
 	// exclude images that have any of the user's permissions
 	if len(userPs) > 0 {
+
 		qb.WriteString(" AND (p.uuid IS NULL OR p.uuid NOT IN (")
 		for i := 0; i < len(userPs); i++ {
 			if i > 0 {

@@ -245,6 +245,7 @@ func (h *imageHandler) getImageData(w http.ResponseWriter, r *http.Request) {
 	connect.SendJsonSuccess(w, http.StatusOK, imageData)
 }
 
+// handleUpdateImageRecord updates the image metadata in persistence and sends a reprocessing request to the reprocess pipeline.
 func (h *imageHandler) handleUpdateImageRecord(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
@@ -639,6 +640,7 @@ func (h *imageHandler) getValidAlbumIds(ctx context.Context, username string, al
 	return ids, nil
 }
 
+// handleDeleteImageRecord handles the deletion of image metadata and submits the object key to the deletion pipeline.
 func (h *imageHandler) handleDeleteImageRecord(w http.ResponseWriter, r *http.Request) {
 
 	// get telemetry from request
@@ -680,8 +682,21 @@ func (h *imageHandler) handleDeleteImageRecord(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// get user permissions
+	// you must have viewing rights to an image to delete it.
+	usrPsMap, _, err := h.perms.GetPatronPermissions(ctx, authedUser.Claims.Subject)
+	if err != nil {
+		log.Error("failed to get user permissions", "err", err.Error())
+		e := connect.ErrorHttp{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to get user permissions",
+		}
+		e.SendJsonErr(w)
+		return
+	}
+
 	// look up slug in database to get image record
-	imageData, err := h.svc.GetImageData(ctx, slug, nil)
+	imageData, err := h.svc.GetImageData(ctx, slug, usrPsMap)
 	if err != nil {
 		log.Error("failed to get image data for deletion", "err", err.Error())
 		h.svc.HandleImageServiceError(ctx, err, w)
